@@ -36,7 +36,12 @@ git push origin HEAD $tag
 
 $assets = ($files + 'SHA256SUMS.txt') | ForEach-Object { "$root\dist\$_" }
 $ghArgs = @('release', 'create', $tag) + $assets + @('--repo', $repo, '--title', "Woof Cleaner $version")
-if ($Notes) { $ghArgs += @('--notes', $Notes) } else { $ghArgs += '--generate-notes' }
+# Notes go through a file: Windows PowerShell mangles multi-line arguments that contain double quotes.
+if ($Notes) {
+    $notesFile = Join-Path $env:TEMP "woof-release-notes-$version.md"
+    [IO.File]::WriteAllText($notesFile, $Notes, (New-Object Text.UTF8Encoding $false))
+    $ghArgs += @('--notes-file', $notesFile)
+} else { $ghArgs += '--generate-notes' }
 if ($Draft) { $ghArgs += '--draft' }
 & $gh @ghArgs
 if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
