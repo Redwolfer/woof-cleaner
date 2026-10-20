@@ -1,7 +1,7 @@
 # 🐶 Woof Cleaner
 
-A CCleaner-style PC toolkit for Windows, built after reverse-engineering CCleaner 7's architecture.
-See [docs/HOW_CCLEANER_WORKS.md](docs/HOW_CCLEANER_WORKS.md) for what was found and how it maps here.
+A rule-driven PC cleaner and toolkit for Windows.
+See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) for the architecture and [docs/ROADMAP.md](docs/ROADMAP.md) for what is next.
 
 Pure Python 3.10+ standard library. No dependencies. It uses Windows' own tools (winget, Windows Update,
 `Get-ScheduledTask`) where they exist.
@@ -61,12 +61,12 @@ python -m woofcleaner            # opens the GUI
 
 ## Tools
 
-The window has a sidebar grouped like CCleaner 7 (Clean / Speed up / Fix & update / Manage), a light and a dark
+The window has a sidebar grouped by task (Clean / Speed up / Fix & update / Manage), a light and a dark
 theme (or *Match Windows*), and Ctrl+1 … Ctrl+9 to jump between pages.
 
 | Page | What it does | How |
 |---|---|---|
-| **Custom Clean** | temp files, caches, browser history / downloads / cookies / form data, Recycle Bin, event logs, AI-tool caches, Store app caches … (75 rules) | declarative rules in `data/rules.ini` (CCleaner's rule format), Analyze → Run Cleaner. Browser databases are cleaned **row by row** (bookmarks and allowlisted cookies survive). The ticked items are remembered and used by scheduled cleans |
+| **Custom Clean** | temp files, caches, browser history / downloads / cookies / form data, Recycle Bin, event logs, AI-tool caches, Store app caches … (75 rules) | declarative rules in `data/rules.ini`, Analyze → Run Cleaner. Browser databases are cleaned **row by row** (bookmarks and allowlisted cookies survive). The ticked items are remembered and used by scheduled cleans |
 | **Registry** | finds entries that point to missing programs/files: obsolete software, app paths, startup entries, MUI cache, shared DLLs, help files, sound events, installer folders, "open with" apps, fonts | only reports an absolute local path that certainly does not exist; backs up to `backups\registry_issues_*.json` first; **Restore a backup** writes any backup back |
 | **Duplicate Finder** | finds files with identical content | size → 64 KB head hash → full BLAKE2b hash; auto-select keeps the oldest, newest or shortest-path copy; deletes to the Recycle Bin |
 | **Startup Manager** | *Startup apps* (Run keys, Startup folders, logon tasks), *Windows services* (start type, start/stop), *Context menu* (right-click entries) | disable = Task Manager's `StartupApproved` flag, `sc config`, `Shell Extensions\Blocked` / `LegacyDisable`; all reversible, deletes are backed up |

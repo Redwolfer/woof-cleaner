@@ -1,8 +1,6 @@
 """Row-level cleaning of browser SQLite databases (history, downloads, cookies, form data).
 
-CCleaner does the same thing (see docs/HOW_CCLEANER_WORKS.md: `CleanTable table 'visits'`, `'urls'`,
-`CleanTableExcludingBookmarks`): it deletes rows instead of whole files, so bookmarks, settings and
-allowlisted cookies survive.
+Rows are deleted instead of whole files, so bookmarks, settings and allowlisted cookies survive.
 
 * Chromium (Chrome, Edge, Brave, Opera, Vivaldi): bookmarks live in a separate JSON file, so emptying the
   history tables never touches them.

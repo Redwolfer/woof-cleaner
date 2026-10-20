@@ -1,7 +1,6 @@
 """Scheduled cleaning through Windows Task Scheduler (plus "start elevated without a UAC prompt").
 
-CCleaner 7 offers daily / weekly / every-2-weeks / at-startup schedules and runs a missed schedule the next
-time the PC is on. The same is done here:
+Daily / weekly / every-2-weeks / at-sign-in schedules; a missed schedule runs the next time the PC is on:
 
 * daily, weekly, biweekly -> a per-user scheduled task registered from XML so that StartWhenAvailable
   ("run as soon as possible after a missed start") and battery settings can be set; schtasks' own switches

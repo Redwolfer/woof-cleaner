@@ -1,8 +1,7 @@
 """Registry cleaner: finds entries that point to files or folders that no longer exist.
 
-Modelled on CCleaner's Registry categories (custom-clean.info.registry.* in its UI): obsolete software,
-application paths, startup entries, MUI cache, shared DLLs, help files, sound events, installer folders,
-"open with" applications and fonts.
+Categories: obsolete software, application paths, startup entries, MUI cache, shared DLLs, help files,
+sound events, installer folders, "open with" applications and fonts.
 
 It is deliberately conservative. An entry is only reported when it names an absolute local path whose
 drive exists and Windows answers "file not found" (access-denied, network, removable and WindowsApps

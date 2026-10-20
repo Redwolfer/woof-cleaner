@@ -45,7 +45,7 @@ class SettingsTab(BaseTab):
         cb = ttk.Checkbutton(card, text="Always start as administrator, without the UAC prompt", variable=self.elev,
                              style="Card.TCheckbutton", command=self._toggle_elev)
         cb.pack(anchor="w", pady=(6, 0))
-        hint = ("Uses a Task Scheduler task with highest privileges (as CCleaner does)."
+        hint = ("Uses a Task Scheduler task with highest privileges."
                 if winutil.is_admin() else "Restart as administrator to change this.")
         ttk.Label(card, text=hint, style="CardMuted.TLabel").pack(anchor="w", pady=(4, 0))
         if not winutil.is_admin():

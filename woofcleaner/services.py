@@ -1,4 +1,4 @@
-"""Windows services: list them, change the start type, start/stop (CCleaner Startup Manager's Services tab).
+"""Windows services: list them, change the start type, start/stop (Startup Manager's Services tab).
 
 Changes go through `sc.exe` in one elevated PowerShell run (a single UAC prompt for a batch). The previous
 start types are written to backups\\services_*.json first.

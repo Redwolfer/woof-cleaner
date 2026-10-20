@@ -1,6 +1,6 @@
-"""Parser for the CCleaner-style cleaning-rule INI format.
+"""Parser for the cleaning-rule INI format.
 
-Format observed in CCleaner 7's ccleaner.ini (see docs/HOW_CCLEANER_WORKS.md):
+Format (see docs/HOW_IT_WORKS.md):
 
     [Rule Vars]                      ; NAME=comma,separated,paths  -> used as <NAME>
     [Rule display name]

@@ -151,7 +151,7 @@ def upgrade(pkg_id: str, on_line: Callable[[str], None] = lambda s: None) -> int
     return p.wait()
 
 
-# ---- skip / ignore (CCleaner's "Skipped & Ignored" tab) ------------------------------------------
+# ---- skip / ignore ----------------------------------------------------------------------------------
 
 def classify(ups: list[Upgrade], prefs: dict | None = None) -> tuple[list[Upgrade], list[Upgrade], list[Upgrade]]:
     """(to update, skipped this version, ignored for good)."""

@@ -1,4 +1,4 @@
-"""Right-click (context) menu entries: list, disable/enable, delete (CCleaner Startup Manager's Context menu tab).
+"""Right-click (context) menu entries: list, disable/enable, delete (Startup Manager's Context menu tab).
 
 Two kinds of entries exist in the registry under Software\\Classes\\<target>:
 * shell extension handlers  `shellex\\ContextMenuHandlers\\<name>` -> a COM CLSID (a DLL). Disabled the

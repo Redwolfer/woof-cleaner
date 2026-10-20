@@ -1,7 +1,6 @@
 """Rule engine: detect -> expand -> enumerate -> (analyse | clean).
 
-Mirrors the pipeline seen in CCleaner 7's service (Windows.Cleaning log
-category): rules are turned into tasks, each task is applied in 'Analyse' or
+Rules are turned into tasks, each task is applied in 'Analyse' or
 'Clean' mode, and every task returns a per-rule result (files / bytes / errors).
 """
 from __future__ import annotations

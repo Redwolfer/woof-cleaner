@@ -1,4 +1,4 @@
-"""Software Updater page (winget), with Skip version / Ignore app like CCleaner's Skipped & Ignored tab."""
+"""Software Updater page (winget), with Skip version / Ignore app and a Skipped & ignored view."""
 from __future__ import annotations
 
 import tkinter as tk
