@@ -11,12 +11,21 @@ $env:PYTHONPATH = $root
 python -m unittest discover -s tests
 if ($LASTEXITCODE -ne 0) { throw 'tests failed' }
 
+# Stamp the exe file properties with the version from woofcleaner\__init__.py
+$version = (Select-String -Path "$root\woofcleaner\__init__.py" -Pattern '__version__ = "([^"]+)"').Matches[0].Groups[1].Value
+$parts = @($version -split '[^\d]+' | Where-Object { $_ } | Select-Object -First 4)
+while ($parts.Count -lt 4) { $parts += '0' }
+New-Item -ItemType Directory -Force "$root\build" | Out-Null
+$versionFile = "$root\build\version_info.txt"
+(Get-Content "$root\tools\version_info.txt" -Raw).Replace('{VERSION_TUPLE}', ($parts -join ', ')).Replace('{VERSION}', $version) |
+    Set-Content -Path $versionFile -Encoding UTF8
+
 $common = @(
     '--noconfirm', '--clean', '--onefile',
     '--icon', "$root\assets\woof.ico",
     '--add-data', "$root\data\rules.ini;data",
     '--add-data', "$root\assets\woof.ico;assets",
-    '--version-file', "$root\tools\version_info.txt",
+    '--version-file', $versionFile,
     '--paths', $root,
     '--distpath', "$root\dist", '--workpath', "$root\build", '--specpath', "$root\build"
 )
@@ -30,7 +39,6 @@ if ($LASTEXITCODE -ne 0) { throw 'CLI build failed' }
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
           "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 if ($iscc) {
-    $version = (Select-String -Path "$root\woofcleaner\__init__.py" -Pattern '__version__ = "([^"]+)"').Matches[0].Groups[1].Value
     & $iscc /Q "/DAppVersion=$version" "$root\installer\woofcleaner.iss"
     if ($LASTEXITCODE -ne 0) { throw 'installer build failed' }
 } else {
