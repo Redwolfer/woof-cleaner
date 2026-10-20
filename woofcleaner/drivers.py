@@ -6,7 +6,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 
-from . import winutil
+from . import settings, winutil
 
 _INVENTORY_PS = r"""
 Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceName } | ForEach-Object {
@@ -139,6 +139,42 @@ def install_updates(update_ids: list[str]) -> list[dict]:
     with open(out, encoding="utf-8-sig") as f:
         data = json.load(f)
     return data if isinstance(data, list) else [data]
+
+
+def device_key(u: DriverUpdate) -> str:
+    """Identity of the device an update is for, so 'ignore' survives newer driver versions."""
+    if u.manufacturer or u.model:
+        return f"{u.manufacturer}|{u.model}".lower()
+    return u.title.rsplit(" - ", 1)[0].lower()
+
+
+def classify(updates: list[DriverUpdate], prefs: dict | None = None):
+    """(to install, skipped this update, ignored device)."""
+    prefs = settings.load() if prefs is None else prefs
+    ignore = set(prefs.get("drv_ignore", []))
+    skip = set(prefs.get("drv_skip", []))
+    active, skipped, ignored = [], [], []
+    for u in updates:
+        if device_key(u) in ignore:
+            ignored.append(u)
+        elif u.update_id in skip:
+            skipped.append(u)
+        else:
+            active.append(u)
+    return active, skipped, ignored
+
+
+def skip_update(u: DriverUpdate) -> None:
+    settings.save(drv_skip=sorted(set(settings.get("drv_skip", [])) | {u.update_id}))
+
+
+def ignore_device(u: DriverUpdate) -> None:
+    settings.save(drv_ignore=sorted(set(settings.get("drv_ignore", [])) | {device_key(u)}))
+
+
+def resume(u: DriverUpdate) -> None:
+    settings.save(drv_skip=[i for i in settings.get("drv_skip", []) if i != u.update_id],
+                  drv_ignore=[k for k in settings.get("drv_ignore", []) if k != device_key(u)])
 
 
 def open_device_manager() -> None:

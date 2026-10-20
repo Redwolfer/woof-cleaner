@@ -8,6 +8,8 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Callable
 
+from . import settings
+
 _SPINNER = re.compile(r"^\s*[-\\|/]?\s*$")  # a lone spinner glyph (not the table's dashed rule)
 _BAR = re.compile(r"[▀-▟]")
 
@@ -147,3 +149,41 @@ def upgrade(pkg_id: str, on_line: Callable[[str], None] = lambda s: None) -> int
         else:
             buf += ch
     return p.wait()
+
+
+# ---- skip / ignore (CCleaner's "Skipped & Ignored" tab) ------------------------------------------
+
+def classify(ups: list[Upgrade], prefs: dict | None = None) -> tuple[list[Upgrade], list[Upgrade], list[Upgrade]]:
+    """(to update, skipped this version, ignored for good)."""
+    prefs = settings.load() if prefs is None else prefs
+    ignore = set(prefs.get("sw_ignore", []))
+    skip = prefs.get("sw_skip", {})
+    active, skipped, ignored = [], [], []
+    for u in ups:
+        if u.id in ignore:
+            ignored.append(u)
+        elif skip.get(u.id) == u.available:
+            skipped.append(u)
+        else:
+            active.append(u)
+    return active, skipped, ignored
+
+
+def skip_version(pkg_id: str, version: str) -> None:
+    """Hide this one version; the next newer version shows up again."""
+    skip = dict(settings.get("sw_skip", {}))
+    skip[pkg_id] = version
+    settings.save(sw_skip=skip)
+
+
+def ignore(pkg_id: str) -> None:
+    """Never offer updates for this package."""
+    ids = set(settings.get("sw_ignore", []))
+    ids.add(pkg_id)
+    settings.save(sw_ignore=sorted(ids))
+
+
+def resume(pkg_id: str) -> None:
+    skip = dict(settings.get("sw_skip", {}))
+    skip.pop(pkg_id, None)
+    settings.save(sw_skip=skip, sw_ignore=[i for i in settings.get("sw_ignore", []) if i != pkg_id])

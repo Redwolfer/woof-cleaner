@@ -1,44 +1,62 @@
-"""Driver Updater tab (Windows Update driver catalogue)."""
+"""Driver Updater page (Windows Update driver catalogue) with Skip / Ignore."""
 from __future__ import annotations
 
+import tkinter as tk
 from tkinter import messagebox, ttk
 
 from .. import drivers as drv
-from .common import OFF, ON, BaseTab, Table, confirm, heading
+from .common import BaseTab, Table, confirm, heading, stat_row, toolbar
 
 
 class DriversTab(BaseTab):
-    title = "\U0001F527 Driver Updater"
+    title = "Driver Updater"
+    icon = ""
 
-    def __init__(self, nb, app):
-        super().__init__(nb, app)
-        self.updates: list[drv.DriverUpdate] = []
-        self.checked: set[str] = set()
-        heading(self, "Driver Updater", "Checks Windows Update for newer Microsoft-certified drivers and installs "
-                "them (needs administrator; one UAC prompt). Also lists devices that have driver problems.").pack(fill="x", pady=(0, 8))
-        bar = ttk.Frame(self)
-        bar.pack(fill="x")
-        ttk.Button(bar, text="Scan for driver updates", command=self.scan).pack(side="left")
-        ttk.Button(bar, text="Device Manager", command=drv.open_device_manager).pack(side="left", padx=6)
-        ttk.Button(bar, text="Install selected", style="Accent.TButton", command=self.install).pack(side="right")
+    def __init__(self, parent, app):
+        super().__init__(parent, app)
+        self.found: list[drv.DriverUpdate] = []
+        self.status_of: dict[str, str] = {}
+        head = heading(self, "Driver Updater", "Checks Windows Update for newer Microsoft-certified drivers and "
+                       "installs them (one administrator prompt, with a restore point first). Also lists devices "
+                       "that have driver problems.")
+        head.pack(fill="x")
+        ttk.Button(head.actions, text="Install selected", style="Accent.TButton", command=self.install).pack(side="right")
+        ttk.Button(head.actions, text="Scan for driver updates", command=self.scan).pack(side="right", padx=8)
 
-        ttk.Label(self, text="Available driver updates", style="Big.TLabel").pack(anchor="w", pady=(8, 0))
-        self.up_table = Table(self, [("cls", "Class", 110, "w"), ("maker", "Manufacturer", 140, "w"),
-                                     ("date", "Driver date", 90, "w"), ("size", "Download", 80, "e")],
-                              tree_heading="Update", height=6)
-        self.up_table.pack(fill="both", expand=True, pady=4)
-        self.up_table.tree.bind("<Button-1>", self._toggle)
+        self.cards = stat_row(self, [("Driver updates", True), ("Device problems", False), ("Installed drivers", False)])
+        self.cards[0].set("–", "press Scan")
 
-        ttk.Label(self, text="Devices with problems", style="Big.TLabel").pack(anchor="w", pady=(6, 0))
-        self.prob_table = Table(self, [("dev", "Device", 340, "w"), ("problem", "Problem", 200, "w"),
-                                       ("id", "Hardware id", 360, "w")], height=3)
-        self.prob_table.pack(fill="x", pady=4)
+        self.nb = ttk.Notebook(self)
+        self.nb.pack(fill="both", expand=True)
 
-        ttk.Label(self, text="Installed drivers", style="Big.TLabel").pack(anchor="w", pady=(6, 0))
-        self.inst_table = Table(self, [("dev", "Device", 300, "w"), ("cls", "Class", 110, "w"),
-                                       ("ver", "Version", 130, "w"), ("date", "Date", 90, "w"),
-                                       ("prov", "Provider", 160, "w")], height=6)
-        self.inst_table.pack(fill="both", expand=True, pady=4)
+        up = ttk.Frame(self.nb, padding=(0, 12, 0, 0))
+        self.nb.add(up, text="Driver updates")
+        bar = toolbar(up, pady=(0, 10))
+        self.show_hidden = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text="Show skipped & ignored", variable=self.show_hidden, command=self._render).pack(side="left")
+        ttk.Button(bar, text="Device Manager", style="Ghost.TButton", command=drv.open_device_manager).pack(side="left", padx=12)
+        ttk.Button(bar, text="Resume", command=self.resume).pack(side="right")
+        ttk.Button(bar, text="Ignore device", command=self.ignore).pack(side="right", padx=8)
+        ttk.Button(bar, text="Skip update", command=self.skip).pack(side="right")
+        self.up_table = Table(up, [("cls", "Class", 110, "w"), ("maker", "Manufacturer", 150, "w"),
+                                   ("date", "Driver date", 100, "w"), ("size", "Download", 90, "e"),
+                                   ("state", "Status", 110, "w")], tree_heading="Update")
+        self.up_table.tree.column("#0", width=380)
+        self.up_table.pack(fill="both", expand=True)
+
+        pr = ttk.Frame(self.nb, padding=(0, 12, 0, 0))
+        self.nb.add(pr, text="Devices with problems")
+        self.prob_table = Table(pr, [("problem", "Problem", 260, "w"), ("id", "Hardware id", 420, "w")],
+                                tree_heading="Device")
+        self.prob_table.pack(fill="both", expand=True)
+
+        inst = ttk.Frame(self.nb, padding=(0, 12, 0, 0))
+        self.nb.add(inst, text="Installed drivers")
+        self.inst_table = Table(inst, [("cls", "Class", 120, "w"), ("ver", "Version", 140, "w"),
+                                       ("date", "Date", 100, "w"), ("prov", "Provider", 180, "w")],
+                                tree_heading="Device")
+        self.inst_table.tree.column("#0", width=340)
+        self.inst_table.pack(fill="both", expand=True)
 
     def on_show(self):
         self.run_bg(lambda: (drv.installed_drivers(), drv.problem_devices()), self._inventory, "Reading drivers ...")
@@ -47,10 +65,14 @@ class DriversTab(BaseTab):
         installed, problems = data
         self.inst_table.clear()
         for d in installed:
-            self.inst_table.tree.insert("", "end", values=(d.device, d.cls, d.version, d.date, d.provider))
+            self.inst_table.add(text=d.device, values=(d.cls, d.version, d.date, d.provider))
         self.prob_table.clear()
         for p in problems:
-            self.prob_table.tree.insert("", "end", values=(p.device, p.problem, p.pnp_id))
+            self.prob_table.add(text=p.device, values=(p.problem, p.pnp_id), tags=("warn",))
+        self.nb.tab(1, text=f"Devices with problems ({len(problems)})")
+        self.nb.tab(2, text=f"Installed drivers ({len(installed)})")
+        self.cards[1].set(str(len(problems)), "need attention" if problems else "all devices OK")
+        self.cards[2].set(str(len(installed)), "")
         self.app.set_status(f"{len(installed)} drivers, {len(problems)} device problem(s). "
                             "Press 'Scan for driver updates' to check Windows Update.")
 
@@ -58,28 +80,51 @@ class DriversTab(BaseTab):
         self.run_bg(drv.search_updates, self._loaded, "Searching Windows Update for drivers (may take a minute) ...")
 
     def _loaded(self, updates):
-        self.updates = updates
-        self.checked = {u.update_id for u in updates}
+        self.found = updates
         self._render()
-        self.app.set_status(f"{len(updates)} driver update(s) available")
+        self.app.set_status(f"{self.cards[0].value.cget('text')} driver update(s) available")
 
     def _render(self):
+        active, skipped, ignored = drv.classify(self.found)
+        self.status_of = {u.update_id: "Ready" for u in active}
+        self.status_of.update({u.update_id: "Skipped" for u in skipped})
+        self.status_of.update({u.update_id: "Device ignored" for u in ignored})
         self.up_table.clear()
-        for u in self.updates:
-            mark = ON if u.update_id in self.checked else OFF
-            self.up_table.tree.insert("", "end", iid=u.update_id, text=f"{mark}  {u.title}",
-                                      values=(u.cls, u.manufacturer, u.date, f"{u.size_mb:.1f} MB"))
+        for u in self.found:
+            state = self.status_of[u.update_id]
+            if state != "Ready" and not self.show_hidden.get():
+                continue
+            self.up_table.add(iid=u.update_id, text=u.title, check=True if state == "Ready" else None,
+                              values=(u.cls, u.manufacturer, u.date, f"{u.size_mb:.1f} MB", state),
+                              tags=() if state == "Ready" else ("muted",))
+        self.cards[0].set(str(len(active)), f"{len(skipped) + len(ignored)} skipped or ignored" if skipped or ignored
+                          else "ready to install")
+        self.nb.tab(0, text=f"Driver updates ({len(active)})")
 
-    def _toggle(self, ev):
-        iid = self.up_table.tree.identify_row(ev.y)
-        if not iid or self.up_table.tree.identify_region(ev.x, ev.y) != "tree":
-            return
-        self.checked ^= {iid}
+    def _selected(self) -> list[drv.DriverUpdate]:
+        ids = set(self.up_table.tree.selection())
+        return [u for u in self.found if u.update_id in ids]
+
+    def skip(self):
+        for u in self._selected():
+            drv.skip_update(u)
         self._render()
-        return "break"
+
+    def ignore(self):
+        sel = self._selected()
+        if sel and confirm(self, "Ignore device", "Never offer driver updates for these devices?\n\n" +
+                           "\n".join(u.title for u in sel)):
+            for u in sel:
+                drv.ignore_device(u)
+            self._render()
+
+    def resume(self):
+        for u in self._selected():
+            drv.resume(u)
+        self._render()
 
     def install(self):
-        ids = [u.update_id for u in self.updates if u.update_id in self.checked]
+        ids = [i for i in self.up_table.checked() if self.status_of.get(i) == "Ready"]
         if not ids:
             messagebox.showinfo("Woof Cleaner", "Scan first, then tick the drivers to install.", parent=self)
             return

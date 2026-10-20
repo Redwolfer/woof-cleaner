@@ -21,12 +21,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import UPDATE_REPO, __version__, paths, winutil
+from . import UPDATE_REPO, __version__, paths, settings, winutil
 
 API = "https://api.github.com/repos/{repo}/releases/latest"
 ALLOWED_HOSTS = ("https://github.com/", "https://objects.githubusercontent.com/",
                  "https://release-assets.githubusercontent.com/")
-SETTINGS = paths.USER_DIR / "settings.json"
 CHECK_INTERVAL = 24 * 3600
 
 
@@ -67,21 +66,11 @@ def is_newer(remote: str, local: str | None = None) -> bool:
 # ---- settings ------------------------------------------------------------------------
 
 def load_settings() -> dict:
-    try:
-        return json.loads(SETTINGS.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    return settings.load()
 
 
 def save_settings(**changes) -> dict:
-    s = load_settings()
-    s.update(changes)
-    try:
-        SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-        SETTINGS.write_text(json.dumps(s, indent=1), encoding="utf-8")
-    except OSError:
-        pass
-    return s
+    return settings.save(**changes)
 
 
 def auto_check_due() -> bool:

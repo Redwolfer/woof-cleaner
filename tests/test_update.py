@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woofcleaner import selfupdate, updater
+from woofcleaner import selfupdate, settings, updater
 
 
 class VersionTests(unittest.TestCase):
@@ -70,7 +70,7 @@ class ReleaseTests(unittest.TestCase):
         patches = [
             mock.patch.object(selfupdate, "API", self.base + "/repos/{repo}/releases/latest"),
             mock.patch.object(selfupdate, "ALLOWED_HOSTS", (self.base,)),
-            mock.patch.object(selfupdate, "SETTINGS", Path(self._td.name) / "settings.json"),
+            mock.patch.object(settings, "SETTINGS", Path(self._td.name) / "settings.json"),
         ]
         for p in patches:
             p.start()

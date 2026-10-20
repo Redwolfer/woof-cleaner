@@ -60,6 +60,10 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 ; In-app updates run setup with /SILENT /RELAUNCH=1: start the new version again afterwards (never elevated).
 Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: IsRelaunch
 
+[UninstallRun]
+; Remove the scheduled-clean tasks / sign-in entry the app created, so nothing points at a deleted exe.
+Filename: "{app}\woof.exe"; Parameters: "schedule --remove-all"; Flags: runhidden; RunOnceId: "RemoveSchedules"
+
 [UninstallDelete]
 ; Created by the app at runtime next to the exe (optional overrides). User backups in %LOCALAPPDATA% are kept.
 Type: files; Name: "{app}\rules.ini"

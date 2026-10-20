@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable
 
-from . import winutil
+from . import browserdb, settings, winutil
 from .rules import Action, FileKey, OnFile, Rule, RuleSet
 
 MAX_LISTED_ITEMS = 2000
@@ -41,13 +41,14 @@ class RuleResult:
     dirs_removed: int = 0
     reg_items: int = 0
     skipped_locked: int = 0
+    records: int = 0          # database rows (browser history, cookies, ...) and event-log entries
     notes: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     items: list[tuple[str, int]] = field(default_factory=list)
 
     @property
     def found_anything(self) -> bool:
-        return bool(self.files or self.reg_items or self.bytes)
+        return bool(self.files or self.reg_items or self.bytes or self.records)
 
 
 # ---- path expansion ---------------------------------------------------------
@@ -151,6 +152,7 @@ class Context:
     now: float = field(default_factory=time.time)
     # Test hook: pretend the OS version/features so rules can be exercised anywhere.
     os_version: tuple[int, int] | None = None
+    cookie_allowlist: list[str] = field(default_factory=settings.cookie_allowlist)
 
     def running_processes(self) -> set[str]:
         if self.running is None:
@@ -390,6 +392,26 @@ def _action(act: Action, rule: Rule, ctx: Context, res: RuleResult) -> None:
                             res.dirs_removed += 1
                     except OSError:
                         pass
+    elif name in browserdb.ACTIONS:
+        label = ", ".join(p.removesuffix(".exe") for p in rule.active_processes) or rule.name
+        for raw in _variants(act.arg or "", ctx):
+            for profile in glob_paths(raw):
+                if ctx.cancel.is_set() or _is_reparse(profile) or not os.path.isdir(profile):
+                    continue
+                r = browserdb.process(name, profile, clean, ctx.cookie_allowlist, label, ctx.cancel.is_set)
+                res.records += r.records
+                res.bytes += r.bytes_freed
+                res.notes += [n for n in r.notes if n not in res.notes]
+                res.items += [(f"{db}  ({n} records)", 0) for db, n in r.items]
+    elif name == "cleanwindowseventlogs":
+        logs = winutil.event_logs()
+        res.records += sum(n for _l, n, _s in logs)
+        res.bytes += sum(s for _l, _n, s in logs)
+        res.items += [(f"{log}  ({n} events)", size) for log, n, size in logs[:MAX_LISTED_ITEMS]]
+        if clean and logs:
+            failed = winutil.clear_event_logs([log for log, _n, _s in logs])
+            if failed:
+                res.notes.append(f"{len(failed)} log(s) could not be cleared (administrator needed)")
     else:
         res.notes.append(f"unsupported action '{act.name}' (skipped)")
 

@@ -25,6 +25,7 @@ $common = @(
     '--icon', "$root\assets\woof.ico",
     '--add-data', "$root\data\rules.ini;data",
     '--add-data', "$root\assets\woof.ico;assets",
+    '--add-data', "$root\assets\woof-32.png;assets",
     '--version-file', $versionFile,
     '--paths', $root,
     '--distpath', "$root\dist", '--workpath', "$root\build", '--specpath', "$root\build"

@@ -20,3 +20,4 @@ else:
 DEFAULT_RULES = EXE_DIR / "rules.ini" if (FROZEN and (EXE_DIR / "rules.ini").exists()) else RESOURCES / "data" / "rules.ini"
 BACKUP_DIR = USER_DIR / "backups"
 ICON = RESOURCES / "assets" / "woof.ico"
+LOGO = RESOURCES / "assets" / "woof-32.png"

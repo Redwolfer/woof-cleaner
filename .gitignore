@@ -4,3 +4,4 @@ build/
 dist/
 backups/
 .claude/
+settings.json

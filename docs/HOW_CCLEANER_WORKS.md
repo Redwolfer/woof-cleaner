@@ -156,12 +156,23 @@ omits it.
 | Recycle Bin, DNS, clipboard, recent docs, empty dirs | `winutil` + `engine._action` |
 | Registry delete with backup | JSON backup in `backups\` before deleting (HKCU only) |
 | Per-rule results | `RuleResult` |
+| Browser SQLite handlers (`HistoryGeneral`, `CleanTableExcludingBookmarks`, cookies) | `browserdb.py` via the `Chromium*` / `Firefox*` actions: rows are deleted, bookmarks and allowlisted cookies kept, then `VACUUM` |
+| `CleanWindowsEventLogs` | `winutil.clear_event_logs` (`EventLogSession.ClearLog`), administrator only |
+| Cookie allowlist ("Keep cookies from trusted sites") | `settings.cookie_allowlist`, matched on the domain and its subdomains |
+| Registry cleaner categories (`custom-clean.info.registry.*`) | `regscan.py`, 10 categories, conservative path checks, v2 JSON backup + restore |
+| Scheduling (daily / weekly / every 2 weeks / startup, missed runs catch up) | `scheduler.py`: Task Scheduler XML with `StartWhenAvailable`, sign-in via `HKCU\…\Run` |
+| "Skip the Windows permission prompt" | on-demand task with `HighestAvailable`, started with `schtasks /Run` |
+| Startup Manager tabs (Startup apps, Scheduled tasks, Windows services, Context menu) | `startup.py`, `services.py`, `contextmenu.py` |
+| Software / Driver Updater "Skipped & Ignored" | `updater.classify`, `drivers.classify` |
 
-**Not implemented (deliberately):** browser SQLite surgery (history, cookies by row), `DiskCleanup` COM
-handlers, event-log clearing, credential cleaning, the `HKLM` registry, secure free-space wiping, and scheduled background cleaning. The Uninstaller, Startup manager, Duplicate Finder, Software Updater and Driver Updater exist as separate tools; see the README. They use Windows' own channels (winget, Windows Update), not CCleaner's back ends.
+**Not implemented (deliberately):** `DiskCleanup` COM handlers, credential and saved-password cleaning, secure
+deletion / free-space wiping, Performance Optimizer's sleep mode, temporary uninstall, Cloud Drive Cleaner and
+Health Check. Woof's updaters use Windows' own channels (winget, Windows Update), not CCleaner's back ends.
+See [FEATURES_VS_CCLEANER.md](FEATURES_VS_CCLEANER.md) for the full comparison.
 
 **Design choices that are mine, not CCleaner's:** never follow symlinks or junctions; refuse drive roots and
-shallow recursive paths; HKCU only; the rule set is my own original `data\rules.ini`, not a copy of
+shallow recursive paths; rule `RegKey`s are HKCU only (the registry cleaner can fix HKLM entries
+when elevated); the rule set is my own original `data\rules.ini`, not a copy of
 Gen Digital's copyrighted file.
 
 **Documented elsewhere but not directly observed in this investigation:** the exact meaning of `RECURSE`

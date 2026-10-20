@@ -1,4 +1,4 @@
-"""Draw the Woof Cleaner paw icon and write assets/woof.ico (pure standard library)."""
+"""Draw the Woof Cleaner paw icon and write assets/woof.ico + assets/woof-32.png (pure standard library)."""
 import struct
 import sys
 import zlib
@@ -68,3 +68,6 @@ if __name__ == "__main__":
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(ico([16, 24, 32, 48, 64, 128, 256]))
     print(f"wrote {out} ({out.stat().st_size} bytes)")
+    logo = out.with_name("woof-32.png")   # sidebar logo in the GUI
+    logo.write_bytes(render(32))
+    print(f"wrote {logo}")

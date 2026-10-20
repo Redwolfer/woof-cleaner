@@ -19,6 +19,8 @@ if IS_WINDOWS:
         "HKEY_CURRENT_USER": winreg.HKEY_CURRENT_USER,
         "HKLM": winreg.HKEY_LOCAL_MACHINE,
         "HKEY_LOCAL_MACHINE": winreg.HKEY_LOCAL_MACHINE,
+        "HKCR": winreg.HKEY_CLASSES_ROOT,
+        "HKEY_CLASSES_ROOT": winreg.HKEY_CLASSES_ROOT,
     }
 
 
@@ -310,3 +312,148 @@ def send_to_recycle_bin(paths: list[str]) -> None:
 def reg_open_ex(path: str, access: int, view: int = 0):
     hive, sub = _split_reg(path)
     return winreg.OpenKey(hive, sub, 0, access | view)
+
+
+# ---- event logs -------------------------------------------------------------
+
+_EVENT_LOGS_PS = r"""
+Get-WinEvent -ListLog * -ErrorAction SilentlyContinue | Where-Object { $_.RecordCount -gt 0 } | ForEach-Object {
+  [pscustomobject]@{ N=$_.LogName; C=[int64]$_.RecordCount; S=[int64]$_.FileSize }
+} | ConvertTo-Json -Compress
+"""
+
+
+def event_logs() -> list[tuple[str, int, int]]:
+    """(log name, record count, file size) of every non-empty Windows event log readable by this user."""
+    if not IS_WINDOWS:
+        return []
+    rows = ps_json(_EVENT_LOGS_PS, timeout=180)
+    return sorted(((r["N"], int(r.get("C") or 0), int(r.get("S") or 0)) for r in rows), key=lambda x: -x[2])
+
+
+def clear_event_logs(names: list[str]) -> list[str]:
+    """Clear the given logs; returns the names that could not be cleared."""
+    if not names:
+        return []
+    arr = ",".join("'" + n.replace("'", "''") + "'" for n in names)
+    script = (f"$f=@(); foreach ($n in @({arr})) {{ try {{ "
+              "[System.Diagnostics.Eventing.Reader.EventLogSession]::GlobalSession.ClearLog($n) } "
+              "catch { $f += $n } }; ConvertTo-Json -Compress -InputObject @($f)")
+    out = run_powershell(script, timeout=600).strip()
+    import json
+    data = json.loads(out) if out else []
+    return data if isinstance(data, list) else [data]
+
+
+# ---- registry write helpers (restore) ------------------------------------------
+
+_BYTES_TYPES = {0, 3, 8, 9, 10}   # REG_NONE, REG_BINARY and the resource-list types come back as bytes
+
+
+def reg_decode(t: int, v):
+    """Backup JSON stores bytes as hex; turn them back into bytes for SetValueEx."""
+    if t in _BYTES_TYPES and isinstance(v, str):
+        try:
+            return bytes.fromhex(v)
+        except ValueError:
+            return v.encode()
+    return v
+
+
+def reg_set(path: str, name: str | None, t: int, v, view: int = 0) -> None:
+    hive, sub = _split_reg(path)
+    with winreg.CreateKeyEx(hive, sub, 0, winreg.KEY_SET_VALUE | view) as k:
+        winreg.SetValueEx(k, name or "", 0, t, reg_decode(t, v))
+
+
+def reg_restore_tree(path: str, dump: dict, view: int = 0) -> None:
+    """Recreate a key from reg_dump() output."""
+    hive, sub = _split_reg(path)
+    with winreg.CreateKeyEx(hive, sub, 0, winreg.KEY_SET_VALUE | view) as k:
+        for n, (t, v) in dump.get("values", {}).items():
+            winreg.SetValueEx(k, n, 0, t, reg_decode(t, v))
+    for child, d in dump.get("subkeys", {}).items():
+        reg_restore_tree(path + "\\" + child, d, view)
+
+
+def reg_dump_view(path: str, view: int = 0) -> dict:
+    """reg_dump() through an explicit 32/64-bit registry view."""
+    hive, sub = _split_reg(path)
+    out = {"values": {}, "subkeys": {}}
+    with winreg.OpenKey(hive, sub, 0, winreg.KEY_READ | view) as k:
+        i = 0
+        while True:
+            try:
+                n, v, t = winreg.EnumValue(k, i)
+            except OSError:
+                break
+            out["values"][n] = [t, v.hex() if isinstance(v, bytes) else v]
+            i += 1
+        i = 0
+        while True:
+            try:
+                s = winreg.EnumKey(k, i)
+            except OSError:
+                break
+            out["subkeys"][s] = reg_dump_view(path + "\\" + s, view)
+            i += 1
+    return out
+
+
+def reg_delete_tree_view(path: str, view: int = 0) -> None:
+    hive, sub = _split_reg(path)
+    with winreg.OpenKey(hive, sub, 0, winreg.KEY_ALL_ACCESS | view) as k:
+        while True:
+            try:
+                child = winreg.EnumKey(k, 0)
+            except OSError:
+                break
+            reg_delete_tree_view(path + "\\" + child, view)
+    winreg.DeleteKeyEx(hive, sub, view, 0)
+
+
+def reg_values(path: str, view: int = 0) -> list[tuple[str, object, int]]:
+    """[(name, data, type)] of one key; [] when it does not exist."""
+    if not IS_WINDOWS:
+        return []
+    out = []
+    try:
+        with reg_open_ex(path, winreg.KEY_READ, view) as k:
+            i = 0
+            while True:
+                try:
+                    out.append(winreg.EnumValue(k, i))
+                except OSError:
+                    break
+                i += 1
+    except OSError:
+        return []
+    return out
+
+
+def reg_subkeys(path: str, view: int = 0) -> list[str]:
+    if not IS_WINDOWS:
+        return []
+    out = []
+    try:
+        with reg_open_ex(path, winreg.KEY_READ, view) as k:
+            i = 0
+            while True:
+                try:
+                    out.append(winreg.EnumKey(k, i))
+                except OSError:
+                    break
+                i += 1
+    except OSError:
+        return []
+    return out
+
+
+def reg_get(path: str, name: str | None = None, view: int = 0, default=None):
+    if not IS_WINDOWS:
+        return default
+    try:
+        with reg_open_ex(path, winreg.KEY_READ, view) as k:
+            return winreg.QueryValueEx(k, name or "")[0]
+    except OSError:
+        return default

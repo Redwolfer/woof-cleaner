@@ -38,9 +38,12 @@ class UpdateDialog(tk.Toplevel):
         self.geometry("560x420")
         self.transient(app)
         self.grab_set()
+        app.theme.paint(self, bg="bg")
         ttk.Label(self, text=f"Woof Cleaner {rel.version} is available", style="H1.TLabel").pack(anchor="w", padx=14, pady=(12, 2))
-        ttk.Label(self, text=f"You have {__version__}.").pack(anchor="w", padx=14)
-        notes = tk.Text(self, height=12, wrap="word", font=("Segoe UI", 9))
+        ttk.Label(self, text=f"You have {__version__}.", style="Sub.TLabel").pack(anchor="w", padx=14)
+        notes = tk.Text(self, height=12, wrap="word", font=app.theme.fonts["body"], relief="flat", padx=10, pady=8,
+                        highlightthickness=1)
+        app.theme.paint(notes, bg="surface", fg="text", highlightbackground="border", highlightcolor="border")
         notes.insert("1.0", rel.notes.strip() or "(no release notes)")
         notes.config(state="disabled")
         notes.pack(fill="both", expand=True, padx=14, pady=8)
@@ -62,7 +65,8 @@ class UpdateDialog(tk.Toplevel):
         if self.asset is None:
             self.btn_now.state(["disabled"])
             why = "Running from source - use git pull." if kind == "source" else "This release has no file for your copy."
-            ttk.Label(self, text=why, foreground="#a33").pack(anchor="w", padx=14)
+            ttk.Label(self, text=why, style="Bad.TLabel").pack(anchor="w", padx=14)
+        app.theme.title_bar(self)
 
     def skip(self):
         selfupdate.save_settings(skip_version=self.rel.version)

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__, winutil
+from . import __version__, settings, winutil
 from .engine import Context, Mode, human, is_applicable, run
 from .paths import BACKUP_DIR, DEFAULT_RULES
 from .rules import load_rules
@@ -182,10 +183,31 @@ def cmd_dupes(a):
 
 def cmd_updates(a):
     from . import updater
-    ups = updater.list_upgrades(a.include_unknown)
+    if a.resume:
+        updater.resume(a.resume)
+        print(f"{a.resume}: updates resumed")
+        return
+    all_ups = updater.list_upgrades(a.include_unknown)
+    if a.skip or a.ignore:
+        pid = a.skip or a.ignore
+        u = next((x for x in all_ups if x.id.lower() == pid.lower()), None)
+        if u is None:
+            sys.exit(f"{pid} has no pending update")
+        if a.skip:
+            updater.skip_version(u.id, u.available)
+            print(f"{u.id}: version {u.available} skipped")
+        else:
+            updater.ignore(u.id)
+            print(f"{u.id}: updates ignored (undo with --resume {u.id})")
+        return
+    ups, skipped, ignored = updater.classify(all_ups)
     for u in ups:
         print(f"{u.name[:44]:<44} {u.id[:36]:<36} {u.version[:16]:>16} -> {u.available}")
-    print(f"\n{len(ups)} updates available")
+    for label, group in (("skipped", skipped), ("ignored", ignored)):
+        for u in group:
+            print(f"  ({label}) {u.id} {u.available}")
+    extra = f", {len(skipped)} skipped, {len(ignored)} ignored" if skipped or ignored else ""
+    print(f"\n{len(ups)} updates available{extra}")
     ids = [u.id for u in ups] if a.all else (a.install or [])
     if ids and _ask(f"Install {len(ids)} update(s)?", a.yes):
         for pid in ids:
@@ -205,10 +227,20 @@ def cmd_drivers(a):
         print("\nUse --scan to check Windows Update for driver updates.")
         return
     print("Searching Windows Update for drivers ...", file=sys.stderr)
-    ups = drv.search_updates()
-    for n, u in enumerate(ups, 1):
-        print(f"{n:>3}. {u.title}  [{u.cls}, {u.date}, {u.size_mb} MB]")
-    print(f"\n{len(ups)} driver update(s)")
+    found = drv.search_updates()
+    if a.skip or a.ignore:
+        n = a.skip or a.ignore
+        if not 1 <= n <= len(found):
+            sys.exit(f"no update number {n}")
+        u = found[n - 1]
+        (drv.skip_update if a.skip else drv.ignore_device)(u)
+        print(f"{u.title}: {'skipped' if a.skip else 'device ignored'}")
+        return
+    ups, skipped, ignored = drv.classify(found)
+    for n, u in enumerate(found, 1):
+        tag = " (skipped)" if u in skipped else " (ignored)" if u in ignored else ""
+        print(f"{n:>3}. {u.title}  [{u.cls}, {u.date}, {u.size_mb} MB]{tag}")
+    print(f"\n{len(ups)} driver update(s) to install")
     if a.install and ups and _ask("Install all of them (UAC prompt)?", a.yes):
         for r in drv.install_updates([u.update_id for u in ups]):
             print(r)
@@ -234,11 +266,144 @@ def cmd_update(a):
     selfupdate.apply(rel, f)
 
 
+# ---- registry --------------------------------------------------------------------
+
+def cmd_registry(a):
+    from . import regscan
+    if a.backups:
+        for f in regscan.list_backups(BACKUP_DIR):
+            print(f"{datetime.fromtimestamp(f.stat().st_mtime):%Y-%m-%d %H:%M}  {f}")
+        return
+    if a.restore:
+        n, errors = regscan.restore(Path(a.restore))
+        print(f"restored {n} item(s)")
+        for e in errors:
+            print("  error:", e)
+        return 1 if errors else 0
+    cats = a.category.split(",") if a.category else None
+    issues = regscan.scan(cats, lambda m: print(m, file=sys.stderr))
+    for cat, (title, _d) in regscan.CATEGORIES.items():
+        mine = [i for i in issues if i.category == cat]
+        if mine:
+            print(f"\n{title} ({len(mine)})")
+            for i in mine:
+                print(f"  {'[admin] ' if i.needs_admin else ''}{i.problem}\n      {i.location}")
+    print(f"\n{len(issues)} issue(s)")
+    if a.fix and issues and _ask("Back up the registry and fix these issues?", a.yes):
+        fixed, errors, backup = regscan.fix(issues, BACKUP_DIR)
+        print(f"fixed {fixed}" + (f"; backup: {backup}" if backup else ""))
+        for e in errors:
+            print("  error:", e)
+
+
+# ---- schedules ---------------------------------------------------------------------
+
+def cmd_schedule(a):
+    from . import scheduler
+    if a.remove_all:
+        for e in scheduler.remove_all():
+            print("  error:", e)
+        print("all schedules removed")
+        return
+    if a.add:
+        s = scheduler.add_schedule(a.add, a.day, a.time, a.elevated)
+        print(f"added {s.id}: {s.description}")
+    elif a.remove or a.enable or a.disable or a.run:
+        sid = a.remove or a.enable or a.disable or a.run
+        if a.remove:
+            scheduler.remove_schedule(sid)
+        elif a.run:
+            scheduler.run_now(sid)
+        else:
+            scheduler.set_enabled(sid, bool(a.enable))
+        print("done")
+    for s in scheduler.list_schedules():
+        print(f"{s.id}  [{'on ' if s.enabled else 'off'}] {s.description:<34} next: {s.next_run or '-':<17} "
+              f"last: {s.last_run or '-'} {s.last_result}")
+    sel = settings.get("clean_selection")
+    what = f"the Custom Clean selection ({len(sel)} rules)" if sel else "the default rules"
+    print(f"\nScheduled cleans use {what}.")
+
+
+def cmd_autoclean(a):
+    """Run by scheduled tasks: clean the saved selection without asking. Never prints (windowed exe)."""
+    import time as _t
+    from . import scheduler
+    if a.delay:
+        _t.sleep(a.delay)
+    rs = load_rules(a.rules_file)
+    known = rs.by_id()
+    ids = [i for i in (settings.get("clean_selection") or []) if i in known] or [r.id for r in rs.rules if r.default]
+    if not winutil.is_admin():
+        ids = [i for i in ids if not known[i].needs_admin]
+    results = run(ids, Context(rs, mode=Mode.CLEAN, backup_dir=BACKUP_DIR))
+    scheduler.record_run(a.trigger, sum(r.bytes for r in results), sum(r.files for r in results),
+                         sum(r.records for r in results), len(ids), sum(len(r.errors) for r in results))
+    return 0
+
+
+# ---- services / context menu --------------------------------------------------------
+
+def cmd_services(a):
+    from . import services as sv
+    items = sv.list_services()
+    if a.set or a.start or a.stop:
+        name = (a.set[0] if a.set else a.start or a.stop).lower()
+        hit = [s for s in items if s.name.lower() == name]
+        if not hit:
+            sys.exit(f"no service named {name}")
+        if a.set:
+            errors = sv.set_start_type(hit, a.set[1], BACKUP_DIR)
+        else:
+            errors = sv.control(hit, "start" if a.start else "stop")
+        print("\n".join(errors) or "done")
+        return 1 if errors else 0
+    for s in items:
+        if a.all or not s.is_microsoft:
+            print(f"{s.name[:28]:<28} {s.state:<8} {s.start_label:<20} {s.display[:50]}")
+
+
+def cmd_contextmenu(a):
+    from . import contextmenu as cm
+    items = [e for e in cm.list_entries() if a.all or not e.is_windows]
+    target = a.disable or a.enable or a.delete
+    if target:
+        e = items[target - 1]
+        if a.delete:
+            if _ask(f"Delete context menu entry '{e.name}' ({e.target})?", a.yes):
+                n, errors, backup = cm.delete([e], BACKUP_DIR)
+                print(f"deleted {n}" + (f"; backup: {backup}" if backup else ""))
+                for x in errors:
+                    print("  error:", x)
+        else:
+            cm.set_enabled(e, bool(a.enable))
+            print(f"{e.name}: {'enabled' if a.enable else 'disabled'} (restart Explorer to see it)")
+        return
+    for n, e in enumerate(items, 1):
+        state = "on " if e.enabled else "off"
+        print(f"{n:>3}. [{state}] {e.target:<18} {e.name[:34]:<34} {e.kind:<7} {e.program[:60]}")
+
+
+def _console_safe() -> None:
+    """Windowed exe: no console at all. Console: never die on characters the code page can't show."""
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name)
+        if stream is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+        elif hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv=None) -> int:
+    _console_safe()
     ap = argparse.ArgumentParser(prog="woofcleaner", description=f"Woof Cleaner {__version__}")
     ap.add_argument("--rules-file", default=str(DEFAULT_RULES))
     sub = ap.add_subparsers(dest="command")
-    sub.add_parser("gui", help="open the window (default)")
+    p = sub.add_parser("gui", help="open the window (default)")
+    p.add_argument("--elevated-launch", action="store_true", help=argparse.SUPPRESS)
     sub.add_parser("list", help="list cleaning rules")
     for name in ("analyze", "clean"):
         p = sub.add_parser(name, help=f"{name} junk files")
@@ -273,22 +438,65 @@ def main(argv=None) -> int:
     p.add_argument("--install", nargs="+", metavar="ID")
     p.add_argument("--all", action="store_true")
     p.add_argument("--include-unknown", action="store_true")
+    p.add_argument("--skip", metavar="ID", help="skip the pending version of this package")
+    p.add_argument("--ignore", metavar="ID", help="never offer updates for this package")
+    p.add_argument("--resume", metavar="ID", help="undo --skip / --ignore")
     p.add_argument("--yes", action="store_true")
     p = sub.add_parser("drivers", help="driver problems and Windows Update driver updates")
     p.add_argument("--list", action="store_true", help="list installed drivers")
     p.add_argument("--scan", action="store_true")
     p.add_argument("--install", action="store_true")
+    p.add_argument("--skip", type=int, metavar="N", help="skip update number N of the scan")
+    p.add_argument("--ignore", type=int, metavar="N", help="ignore the device of update number N")
     p.add_argument("--yes", action="store_true")
     p = sub.add_parser("update", help="update Woof Cleaner itself from GitHub Releases")
     p.add_argument("--check", action="store_true", help="only report whether a new version exists")
     p.add_argument("--yes", action="store_true")
+    p = sub.add_parser("registry", help="find and fix broken registry entries")
+    p.add_argument("--category", help="comma separated: software, apppaths, startup, muicache, shareddlls, "
+                   "helpfiles, sounds, installer, openwith, fonts")
+    p.add_argument("--fix", action="store_true")
+    p.add_argument("--backups", action="store_true", help="list registry backups")
+    p.add_argument("--restore", metavar="FILE", help="write a backup back into the registry")
+    p.add_argument("--yes", action="store_true")
+    p = sub.add_parser("schedule", help="scheduled automatic cleaning")
+    p.add_argument("--add", choices=["daily", "weekly", "biweekly", "logon"])
+    p.add_argument("--day", default="Monday")
+    p.add_argument("--time", default="10:00", help="HH:MM")
+    p.add_argument("--elevated", action="store_true", help="run with administrator rights (create as admin)")
+    p.add_argument("--remove", metavar="ID")
+    p.add_argument("--enable", metavar="ID")
+    p.add_argument("--disable", metavar="ID")
+    p.add_argument("--run", metavar="ID", help="run a schedule now")
+    p.add_argument("--remove-all", action="store_true", help="remove every schedule (used by the uninstaller)")
+    p = sub.add_parser("auto-clean", help="clean the saved selection without asking (used by schedules)")
+    p.add_argument("--trigger", default="manual")
+    p.add_argument("--delay", type=int, default=0, help="seconds to wait first")
+    p = sub.add_parser("services", help="list Windows services / change start type")
+    p.add_argument("--all", action="store_true", help="include Microsoft services")
+    p.add_argument("--set", nargs=2, metavar=("NAME", "START"), help="START: auto, delayed-auto, demand, disabled")
+    p.add_argument("--start", metavar="NAME")
+    p.add_argument("--stop", metavar="NAME")
+    p = sub.add_parser("contextmenu", help="list / disable right-click menu entries")
+    p.add_argument("--all", action="store_true", help="include Windows' own entries")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--disable", type=int, metavar="N")
+    g.add_argument("--enable", type=int, metavar="N")
+    g.add_argument("--delete", type=int, metavar="N")
+    p.add_argument("--yes", action="store_true")
     a = ap.parse_args(argv)
 
     if a.command in (None, "gui"):
+        if not getattr(a, "elevated_launch", False) and not winutil.is_admin() and settings.get("auto_elevate"):
+            from . import scheduler
+            if scheduler.start_elevated():
+                return 0
         from .gui import launch
         launch(a.rules_file)
         return 0
     handler = {"list": cmd_list, "analyze": cmd_clean, "clean": cmd_clean, "programs": cmd_programs,
                "uninstall": cmd_uninstall, "startup": cmd_startup, "dupes": cmd_dupes,
-               "updates": cmd_updates, "drivers": cmd_drivers, "update": cmd_update}[a.command]
+               "updates": cmd_updates, "drivers": cmd_drivers, "update": cmd_update, "registry": cmd_registry,
+               "schedule": cmd_schedule, "auto-clean": cmd_autoclean, "services": cmd_services,
+               "contextmenu": cmd_contextmenu}[a.command]
     return handler(a) or 0

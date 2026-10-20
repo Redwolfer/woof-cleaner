@@ -8,13 +8,13 @@ Pure Python 3.10+ standard library. No dependencies. It uses Windows' own tools 
 
 ## Install
 
-Run **`dist\WoofCleaner-Setup-0.2.0.exe`** (~12 MB). The wizard lets you choose:
+Run **`dist\WoofCleaner-Setup-<version>.exe`** (~12 MB). The wizard lets you choose:
 
 * **Only for me** (default, no admin) → `%LOCALAPPDATA%\Programs\Woof Cleaner`, or **all users** → `Program Files`
 * Start Menu shortcut, optional Desktop shortcut, optional `woof` command on PATH
-* An entry in *Settings → Apps* to uninstall (shortcuts, PATH and files are removed; your backups are kept)
+* An entry in *Settings → Apps* to uninstall (shortcuts, PATH, files and scheduled cleans are removed; your backups are kept)
 
-Silent install for scripting: `WoofCleaner-Setup-0.2.0.exe /VERYSILENT /CURRENTUSER /TASKS="desktopicon,addtopath"`.
+Silent install for scripting: `WoofCleaner-Setup-<version>.exe /VERYSILENT /CURRENTUSER /TASKS="desktopicon,addtopath"`.
 
 ## Updates
 
@@ -61,14 +61,20 @@ python -m woofcleaner            # opens the GUI
 
 ## Tools
 
-| Tab | What it does | How |
+The window has a sidebar grouped like CCleaner 7 (Clean / Speed up / Fix & update / Manage), a light and a dark
+theme (or *Match Windows*), and Ctrl+1 … Ctrl+9 to jump between pages.
+
+| Page | What it does | How |
 |---|---|---|
-| **Custom Clean** | temp files, caches, browser junk, Recycle Bin, traces | declarative rules in `data/rules.ini` (CCleaner's rule format), Analyze → Run Cleaner |
-| **Uninstaller** | lists installed programs, runs their uninstaller, then sweeps leftovers | Uninstall registry keys (HKLM 64/32-bit + HKCU); MSI via `msiexec /x`; leftovers go to the Recycle Bin or a registry backup |
-| **Startup** | enable, disable or delete startup programs | Run/RunOnce keys, Startup folders, logon/boot scheduled tasks; disable uses Task Manager's `StartupApproved` flag, so it is reversible |
+| **Custom Clean** | temp files, caches, browser history / downloads / cookies / form data, Recycle Bin, event logs, AI-tool caches, Store app caches … (75 rules) | declarative rules in `data/rules.ini` (CCleaner's rule format), Analyze → Run Cleaner. Browser databases are cleaned **row by row** (bookmarks and allowlisted cookies survive). The ticked items are remembered and used by scheduled cleans |
+| **Registry** | finds entries that point to missing programs/files: obsolete software, app paths, startup entries, MUI cache, shared DLLs, help files, sound events, installer folders, "open with" apps, fonts | only reports an absolute local path that certainly does not exist; backs up to `backups\registry_issues_*.json` first; **Restore a backup** writes any backup back |
 | **Duplicate Finder** | finds files with identical content | size → 64 KB head hash → full BLAKE2b hash; auto-select keeps the oldest, newest or shortest-path copy; deletes to the Recycle Bin |
-| **Software Updater** | finds newer versions of installed apps and installs them silently | `winget upgrade` |
-| **Driver Updater** | Microsoft-certified driver updates and devices with driver problems | Windows Update Agent API (`Microsoft.Update.Session`) + `Win32_PnPSignedDriver` / `Win32_PnPEntity` |
+| **Startup Manager** | *Startup apps* (Run keys, Startup folders, logon tasks), *Windows services* (start type, start/stop), *Context menu* (right-click entries) | disable = Task Manager's `StartupApproved` flag, `sc config`, `Shell Extensions\Blocked` / `LegacyDisable`; all reversible, deletes are backed up |
+| **Software Updater** | finds newer versions of installed apps and installs them silently; **Skip this version** / **Ignore app** | `winget upgrade` |
+| **Driver Updater** | Microsoft-certified driver updates, devices with driver problems; **Skip update** / **Ignore device** | Windows Update Agent API (`Microsoft.Update.Session`) + `Win32_PnPSignedDriver` / `Win32_PnPEntity` |
+| **Uninstaller** | lists installed programs, runs their uninstaller, then sweeps leftovers | Uninstall registry keys (HKLM 64/32-bit + HKCU); MSI via `msiexec /x`; leftovers go to the Recycle Bin or a registry backup |
+| **Scheduled Cleaning** | daily, weekly, every 2 weeks or at every sign-in; history of automatic cleans | per-user Task Scheduler task with *run when available* (a missed run happens when the PC is next on); sign-in uses `HKCU\…\Run` |
+| **Settings** | theme, cookie allowlist, start as administrator **without a UAC prompt**, update checks, data folder | the no-UAC start is an on-demand task with highest privileges, created once from an elevated window |
 
 ## Command line
 
@@ -82,7 +88,15 @@ python -m woofcleaner startup --tasks               # numbered list
 python -m woofcleaner startup --disable 4
 python -m woofcleaner dupes D:\Photos --min-size 500KB --ext jpg,png [--delete oldest]
 python -m woofcleaner updates [--install Git.Git | --all]
-python -m woofcleaner drivers [--list] [--scan] [--install]
+python -m woofcleaner updates --skip Git.Git | --ignore Zoom.Zoom | --resume Zoom.Zoom
+python -m woofcleaner drivers [--list] [--scan] [--install] [--skip N | --ignore N]
+python -m woofcleaner registry [--category muicache,startup] [--fix]   # scan; --fix backs up first
+python -m woofcleaner registry --backups | --restore backups\registry_issues_....json
+python -m woofcleaner schedule --add biweekly --day Friday --time 09:30   # daily|weekly|biweekly|logon
+python -m woofcleaner schedule [--enable ID | --disable ID | --run ID | --remove ID]
+python -m woofcleaner services [--all] [--set Spooler demand | --start NAME | --stop NAME]
+python -m woofcleaner contextmenu [--all] [--disable N | --enable N | --delete N]
+python -m woofcleaner auto-clean                    # what a schedule runs: the saved selection, no questions
 ```
 
 Every destructive command asks first (`--yes` skips the question).
@@ -98,6 +112,14 @@ HKLM startup entries, scheduled tasks and driver installs.
 * Duplicate Finder refuses to delete every copy of a file. It skips cloud placeholders, which reading would
   download, and it skips system folders.
 * Updaters only use Microsoft's own channels (the winget catalogue, Windows Update).
+* Browser cleaning deletes database rows, never whole profiles: bookmarks, settings, saved passwords and the
+  cookies of allowlisted sites are kept. A browser that is running locks its database; Woof says "close it and run
+  again" instead of forcing it.
+* The registry cleaner never judges network, removable, access-denied or WindowsApps paths, skips commands run
+  through hosts such as rundll32/msiexec, and leaves services, file associations and firewall rules alone.
+  HKLM issues need administrator rights.
+* Scheduled cleans only run the items ticked in Custom Clean; items that need administrator rights are skipped
+  unless the schedule was created *with administrator rights*.
 
 ## Tests
 

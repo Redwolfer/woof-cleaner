@@ -8,34 +8,37 @@ from tkinter import messagebox, ttk
 
 from .. import uninstaller as un
 from ..engine import human
-from .common import OFF, ON, BaseTab, Table, confirm, heading
+from ..paths import BACKUP_DIR
+from .common import BaseTab, Table, confirm, heading, stat_row, toolbar
 
 
 class UninstallTab(BaseTab):
-    title = "\U0001F5D1 Uninstaller"
+    title = "Uninstaller"
+    icon = ""
 
-    def __init__(self, nb, app):
-        super().__init__(nb, app)
+    def __init__(self, parent, app):
+        super().__init__(parent, app)
         self.programs: list[un.Program] = []
-        heading(self, "Software Uninstaller", "Runs each program's own uninstaller, then offers to remove the "
-                "folders and registry keys it left behind (to the Recycle Bin / with a backup).").pack(fill="x", pady=(0, 8))
-        bar = ttk.Frame(self)
-        bar.pack(fill="x")
-        ttk.Label(bar, text="Search:").pack(side="left")
+        head = heading(self, "Software Uninstaller", "Runs each program's own uninstaller, then offers to remove "
+                       "the folders and registry keys it left behind (to the Recycle Bin / with a backup).")
+        head.pack(fill="x")
+        ttk.Button(head.actions, text="Uninstall", style="Accent.TButton", command=self.uninstall).pack(side="right")
+        bar = toolbar(self)
         self.q = tk.StringVar()
         self.q.trace_add("write", lambda *_: self._fill())
-        ttk.Entry(bar, textvariable=self.q, width=30).pack(side="left", padx=(4, 12))
+        ttk.Entry(bar, textvariable=self.q, width=34).pack(side="left")
+        ttk.Label(bar, text="  search by name or publisher", style="Muted.TLabel").pack(side="left")
         self.show_sys = tk.BooleanVar(value=False)
-        ttk.Checkbutton(bar, text="Show system components", variable=self.show_sys, command=self.refresh).pack(side="left")
-        ttk.Button(bar, text="Refresh", command=self.refresh).pack(side="right")
-        ttk.Button(bar, text="Uninstall", style="Accent.TButton", command=self.uninstall).pack(side="right", padx=6)
-        self.table = Table(self, [("name", "Program", 330, "w"), ("publisher", "Publisher", 200, "w"),
-                                  ("version", "Version", 110, "w"), ("size", "Size", 80, "e"),
-                                  ("date", "Installed", 90, "w"), ("scope", "Type", 90, "w")], selectmode="browse")
-        self.table.pack(fill="both", expand=True, pady=6)
+        ttk.Checkbutton(bar, text="Show system components", variable=self.show_sys,
+                        command=self.refresh).pack(side="left", padx=16)
+        ttk.Button(bar, text="Refresh", style="Ghost.TButton", command=self.refresh).pack(side="right")
+        self.cards = stat_row(self, [("Programs", True), ("Reported size", False)])
+        self.table = Table(self, [("publisher", "Publisher", 200, "w"), ("version", "Version", 120, "w"),
+                                  ("size", "Size", 90, "e"), ("date", "Installed", 100, "w"),
+                                  ("scope", "Type", 100, "w")], tree_heading="Program", selectmode="browse")
+        self.table.tree.column("#0", width=340)
+        self.table.pack(fill="both", expand=True)
         self.table.tree.bind("<Double-1>", lambda e: self.uninstall())
-        self.summary = ttk.Label(self, text="", style="Big.TLabel")
-        self.summary.pack(anchor="w")
 
     def on_show(self):
         self.refresh()
@@ -57,10 +60,11 @@ class UninstallTab(BaseTab):
             if q and q not in p.name.lower() and q not in p.publisher.lower():
                 continue
             total += p.size_kb * 1024
-            self.table.tree.insert("", "end", iid=str(i), values=(
-                p.name, p.publisher, p.version, human(p.size_kb * 1024) if p.size_kb else "",
+            self.table.add(iid=str(i), text=p.name, values=(
+                p.publisher, p.version, human(p.size_kb * 1024) if p.size_kb else "",
                 p.install_date, f"{p.scope} {p.arch}".strip()))
-        self.summary.config(text=f"{len(self.table.tree.get_children())} programs, {human(total)} reported size")
+        self.cards[0].set(str(len(self.table.tree.get_children())), "shown" if q else "installed")
+        self.cards[1].set(human(total), "as reported by the installers")
 
     def _selected(self) -> un.Program | None:
         sel = self.table.tree.selection()
@@ -101,40 +105,34 @@ class LeftoverDialog(tk.Toplevel):
         super().__init__(tab)
         self.tab, self.items = tab, leftovers
         self.title(f"Leftovers of {p.name}")
-        self.geometry("760x380")
+        self.geometry("820x440")
         self.transient(tab)
-        ttk.Label(self, text=f"{p.name} was uninstalled. These items look like leftovers:", style="H1.TLabel").pack(anchor="w", padx=10, pady=8)
-        self.table = Table(self, [("kind", "Type", 80, "w"), ("size", "Size", 80, "e"), ("why", "Found by", 120, "w")],
+        tab.app.theme.paint(self, bg="bg")
+        body = ttk.Frame(self, padding=(20, 16))
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Leftovers found", style="H1.TLabel").pack(anchor="w")
+        ttk.Label(body, text=f"{p.name} was uninstalled. These items look like what it left behind:",
+                  style="Sub.TLabel").pack(anchor="w", pady=(2, 12))
+        self.table = Table(body, [("kind", "Type", 80, "w"), ("size", "Size", 80, "e"), ("why", "Found by", 120, "w")],
                            tree_heading="Path", height=10)
-        self.table.pack(fill="both", expand=True, padx=10)
-        self.checked = {i: True for i in range(len(leftovers))}
+        self.table.pack(fill="both", expand=True)
         for i, lo in enumerate(leftovers):
-            self.table.tree.insert("", "end", iid=str(i), text=f"{ON}  {lo.path}",
-                                   values=(lo.kind, human(lo.size) if lo.kind == "folder" else "", lo.reason))
-        self.table.tree.bind("<Button-1>", self._toggle)
-        bar = ttk.Frame(self)
-        bar.pack(fill="x", padx=10, pady=8)
+            self.table.add(iid=str(i), text=lo.path, check=True,
+                           values=(lo.kind, human(lo.size) if lo.kind == "folder" else "", lo.reason))
+        bar = ttk.Frame(body)
+        bar.pack(fill="x", pady=(12, 0))
         ttk.Button(bar, text="Remove selected", style="Accent.TButton", command=self._remove).pack(side="right")
-        ttk.Button(bar, text="Keep all", command=self.destroy).pack(side="right", padx=6)
-
-    def _toggle(self, ev):
-        iid = self.table.tree.identify_row(ev.y)
-        if not iid:
-            return
-        i = int(iid)
-        self.checked[i] = not self.checked[i]
-        t = self.table.tree.item(iid, "text")
-        self.table.tree.item(iid, text=(ON if self.checked[i] else OFF) + t[1:])
-        return "break"
+        ttk.Button(bar, text="Keep all", command=self.destroy).pack(side="right", padx=8)
+        tab.app.theme.title_bar(self)
 
     def _remove(self):
-        chosen = [lo for i, lo in enumerate(self.items) if self.checked[i]]
+        chosen = [self.items[int(i)] for i in self.table.checked()]
         backup: dict = {}
         errors = un.remove_leftovers(chosen, backup)
         if backup:
-            from ..cli import BACKUP_DIR
             BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-            (BACKUP_DIR / f"leftovers_{datetime.now():%Y%m%d_%H%M%S}.json").write_text(json.dumps(backup, indent=1, default=str))
+            (BACKUP_DIR / f"leftovers_{datetime.now():%Y%m%d_%H%M%S}.json").write_text(
+                json.dumps(backup, indent=1, default=str), encoding="utf-8")
         msg = f"Removed {len(chosen) - len(errors)} item(s). Folders are in the Recycle Bin."
         if errors:
             msg += "\n\nErrors:\n" + "\n".join(errors[:8])
