@@ -18,6 +18,7 @@ Format (see docs/HOW_IT_WORKS.md):
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,7 @@ class FileKey:
     patterns: list[str]
     recurse: bool = False
     remove_self: bool = False
+    literal: bool = False
 
 
 @dataclass
@@ -79,6 +81,16 @@ class Rule:
 class RuleSet:
     vars: dict[str, list[str]] = field(default_factory=dict)
     rules: list[Rule] = field(default_factory=list)
+
+    def selection(self, saved: list[str] | None) -> list[str]:
+        if saved is None:
+            return [rule.id for rule in self.rules if rule.default]
+        wanted = set(saved)
+        return [rule.id for rule in self.rules if rule.id in wanted]
+
+    def selection_summary(self, saved: list[str] | None) -> str:
+        source = "recommended selection" if saved is None else "Custom Clean selection"
+        return f"{source} ({len(self.selection(saved))} rules)"
 
     def by_id(self) -> dict[str, Rule]:
         return {r.id: r for r in self.rules}
@@ -172,4 +184,14 @@ def parse_rules(text: str) -> RuleSet:
 
 
 def load_rules(path: str | Path) -> RuleSet:
-    return parse_rules(Path(path).read_text(encoding="utf-8-sig"))
+    from . import settings
+
+    rules = parse_rules(Path(path).read_text(encoding="utf-8-sig"))
+    folders = settings.get("included_folders", [])
+    if folders and "user.folders" not in rules.by_id():
+        files = [FileKey(folder, ["*"], recurse=True, literal=True) for folder in folders
+                 if isinstance(folder, str) and os.path.isabs(folder) and len(Path(folder).parts) >= 3]
+        if files:
+            rules.rules.append(Rule("Custom folders", "user.folders", "My folders", file_keys=files,
+                                    warning="All files in your included folders can be permanently deleted."))
+    return rules

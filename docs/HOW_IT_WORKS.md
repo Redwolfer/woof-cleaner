@@ -56,8 +56,9 @@ alternative, so a single rule covers every profile of a browser (`Default`, `Pro
 4. Each rule returns a `RuleResult`: files, bytes, database records, registry items, notes and errors.
 
 Safety rules in the engine: symlinks and junctions are never followed; drive roots and shallow recursive
-paths are refused; files in use are skipped and counted; registry deletes are written to
-`backups\registry_*.json` first.
+paths are refused; files in use are skipped and counted. Custom Clean snapshots the selected HKCU targets into one unique JSON backup before
+any registry deletion. It compares each live value or subtree with its snapshot again before deleting it. The same
+restore command reads existing backups. File scans resolve included folders literally and skip excluded subtrees.
 
 ## 3. Browser databases
 

@@ -20,8 +20,17 @@ class SettingsTab(BaseTab):
     def __init__(self, parent, app):
         super().__init__(parent, app)
         heading(self, "Settings", "Personalize Woof Cleaner.").pack(fill="x", pady=(0, 16))
-        cols = ttk.Frame(self)
-        cols.pack(fill="both", expand=True)
+        viewport = ttk.Frame(self)
+        viewport.pack(fill="both", expand=True)
+        canvas = tk.Canvas(viewport, highlightthickness=0)
+        app.theme.paint(canvas, bg="bg")
+        scroll = ttk.Scrollbar(viewport, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        cols = ttk.Frame(canvas)
+        window = canvas.create_window(0, 0, anchor="nw", window=cols)
+        cols.bind("<Configure>", lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
         cols.columnconfigure(0, weight=1, uniform="c")
         cols.columnconfigure(1, weight=1, uniform="c")
         left = ttk.Frame(cols)
@@ -29,6 +38,15 @@ class SettingsTab(BaseTab):
         right = ttk.Frame(cols)
         right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
 
+        def resize(event):
+            canvas.itemconfigure(window, width=event.width)
+            narrow = event.width < 850
+            right.grid(row=int(narrow), column=0 if narrow else 1, sticky="nsew", padx=(0, 0) if narrow else (8, 0))
+            cols.columnconfigure(1, weight=0 if narrow else 1, uniform="" if narrow else "c")
+        canvas.bind("<Configure>", resize)
+        self.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-int(e.delta / 120), "units")
+                      if self.winfo_ismapped() and app.pages[app.current] is self and
+                      str(e.widget).startswith(str(cols)) and not isinstance(e.widget, tk.Listbox) else None, add="+")
         # appearance
         card = self._card(left, "Appearance", "Choose how Woof Cleaner looks.")
         self.mode = tk.StringVar(value=app.theme.mode)

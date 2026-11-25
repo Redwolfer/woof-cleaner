@@ -6,6 +6,7 @@ from tkinter import messagebox, ttk
 
 from .. import scheduler, settings, winutil
 from ..engine import human
+from ..rules import load_rules
 from .common import BaseTab, Table, confirm, heading
 
 TIMES = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
@@ -68,10 +69,11 @@ class ScheduleTab(BaseTab):
 
         hb = ttk.Frame(self)
         hb.pack(fill="x", pady=(16, 8))
-        ttk.Label(hb, text="Recent automatic cleans", style="H2.TLabel").pack(side="left")
+        ttk.Label(hb, text="Recent activity", style="H2.TLabel").pack(side="left")
         self.hist_info = ttk.Label(hb, text="", style="Muted.TLabel")
         self.hist_info.pack(side="right")
-        self.hist = Table(self, [("trigger", "Started by", 140, "w"), ("freed", "Freed", 100, "e"),
+        self.hist = Table(self, [("trigger", "Started by", 100, "w"), ("mode", "Action", 80, "w"),
+                                 ("status", "Status", 88, "w"), ("freed", "Result", 100, "e"),
                                  ("files", "Files", 90, "e"), ("records", "Records", 90, "e"),
                                  ("errors", "Errors", 80, "e")], tree_heading="When", height=6)
         self.hist.pack(fill="both", expand=True)
@@ -101,13 +103,14 @@ class ScheduleTab(BaseTab):
         for h in hist[:50]:
             trig = h.get("trigger", "")
             self.hist.add(text=h.get("time", ""), values=(names.get(trig, "Sign-in" if trig == "logon" else trig.title()),
-                                                          human(h.get("freed", 0)), f"{h.get('files', 0):,}",
+                                                          h.get("mode", "clean").title(), h.get("status", "Partial" if h.get("errors") else "Completed"),
+                                                          human(h.get("estimated", 0) if h.get("mode") == "analyse" else h.get("freed", 0)), f"{h.get('files', 0):,}",
                                                           f"{h.get('records', 0):,}", h.get("errors", 0)))
-        self.hist_info.config(text=f"{human(sum(h.get('freed', 0) for h in hist))} freed in {len(hist)} automatic "
-                                   f"clean(s)  ·  {sum(s.enabled for s in items)} of {len(items)} schedule(s) on")
+        self.hist_info.config(text=f"{human(sum(h.get('freed', 0) for h in hist))} freed in {len(hist)} "
+                                   f"runs  ·  {sum(s.enabled for s in items)} of {len(items)} schedule(s) on")
         sel = settings.get("clean_selection")
-        self.sel_info.config(text=(f"Scheduled cleans use your Custom Clean selection ({len(sel)} items)." if sel else
-                                   "Scheduled cleans use the recommended Custom Clean items.") +
+        selection = load_rules(self.app.rules_file).selection_summary(sel)
+        self.sel_info.config(text=f"Scheduled cleans use your {selection}." +
                              ("  Items that need administrator rights are skipped unless the schedule has them."))
         self._freq_changed()
 

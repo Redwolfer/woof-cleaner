@@ -52,7 +52,7 @@ class ReleaseTests(unittest.TestCase):
         self.setup_bytes = b"MZ fake installer"
         good = hashlib.sha256(self.setup_bytes).hexdigest()
         release = {
-            "tag_name": "v9.9.9", "body": "Better woofs", "html_url": "https://github.com/o/r/releases/v9.9.9",
+            "tag_name": "fresh-v9.9.9", "body": "Better woofs", "html_url": "https://github.com/o/r/releases/tag/fresh-v9.9.9",
             "assets": [
                 {"name": "WoofCleaner-Setup-9.9.9.exe", "browser_download_url": f"{self.base}/setup.exe", "size": 17},
                 {"name": "WoofCleaner.exe", "browser_download_url": f"{self.base}/portable.exe", "size": 3,
@@ -99,6 +99,11 @@ class ReleaseTests(unittest.TestCase):
 
     def test_up_to_date_returns_none(self):
         with mock.patch.object(selfupdate, "__version__", "9.9.9"):
+            self.assertIsNone(selfupdate.check("o/r"))
+
+    def test_legacy_release_is_ignored_after_reset(self):
+        _Handler.files["/repos/o/r/releases/latest"] = json.dumps({"tag_name": "v0.4.0"}).encode()
+        with mock.patch.object(selfupdate, "__version__", "0.1.0"):
             self.assertIsNone(selfupdate.check("o/r"))
 
 

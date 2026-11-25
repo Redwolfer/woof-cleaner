@@ -1,9 +1,12 @@
 ; Inno Setup script for Woof Cleaner. Build with build.ps1, or:
-;   ISCC.exe /DAppVersion=0.2.0 installer\woofcleaner.iss
-; Expects dist\WoofCleaner.exe and dist\woof.exe (PyInstaller one-file builds) to exist.
+;   ISCC.exe /DAppVersion=1.0.0 installer\woofcleaner.iss
+; Expects both PyInstaller EXEs under dist\fresh-v<AppVersion>.
 
 #ifndef AppVersion
-  #define AppVersion "0.2.0"
+  #define AppVersion "1.0.0"
+#endif
+#ifndef ArtifactDir
+  #define ArtifactDir "..\dist\fresh-v" + AppVersion
 #endif
 #define AppName "Woof Cleaner"
 #define AppExe "WoofCleaner.exe"
@@ -32,7 +35,7 @@ UninstallDisplayName={#AppName}
 WizardStyle=modern
 Compression=lzma2/ultra64
 SolidCompression=yes
-OutputDir=..\dist
+OutputDir={#ArtifactDir}
 OutputBaseFilename=WoofCleaner-Setup-{#AppVersion}
 ChangesEnvironment=yes
 CloseApplications=yes
@@ -46,8 +49,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "addtopath"; Description: "Add the 'woof' command-line tool to PATH"; GroupDescription: "Command line:"; Flags: unchecked
 
 [Files]
-Source: "..\dist\WoofCleaner.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\dist\woof.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ArtifactDir}\WoofCleaner.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ArtifactDir}\woof.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\data\rules.ini"; DestDir: "{app}"; DestName: "rules.example.ini"; Flags: ignoreversion
 

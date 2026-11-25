@@ -12,6 +12,8 @@ Keys in use:
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import threading
 
 from . import paths
@@ -30,16 +32,34 @@ def load() -> dict:
         return {}
 
 
-def save(**changes) -> dict:
+def update(change) -> dict:
     with _lock:
-        s = load()
-        s.update(changes)
-        try:
-            SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-            SETTINGS.write_text(json.dumps(s, indent=1), encoding="utf-8")
-        except OSError:
-            pass
-        return s
+        SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+        with SETTINGS.with_suffix(".lock").open("a+b") as lock:
+            if os.name == "nt":
+                import msvcrt
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock, fcntl.LOCK_EX)
+            state = load()
+            change(state)
+            tmp = tempfile.NamedTemporaryFile("w", dir=SETTINGS.parent, delete=False, encoding="utf-8")
+            try:
+                with tmp:
+                    json.dump(state, tmp, indent=1)
+                    tmp.flush()
+                    os.fsync(tmp.fileno())
+                os.replace(tmp.name, SETTINGS)
+            finally:
+                if os.path.exists(tmp.name):
+                    os.unlink(tmp.name)
+            return state
+
+
+def save(**changes) -> dict:
+    return update(lambda state: state.update(changes))
 
 
 def get(key: str, default=None):

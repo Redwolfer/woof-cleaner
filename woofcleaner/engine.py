@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable
+from uuid import uuid4
 
 from . import browserdb, settings, winutil
 from .rules import Action, FileKey, OnFile, Rule, RuleSet
@@ -107,6 +108,8 @@ def glob_paths(pattern: str) -> list[str]:
     for seg in segs:
         nxt: list[str] = []
         for base in current:
+            if _is_reparse(base):
+                continue
             if "*" in seg or "?" in seg:
                 rx = _wild(seg)
                 try:
@@ -152,6 +155,13 @@ class Context:
     # Test hook: pretend the OS version/features so rules can be exercised anywhere.
     os_version: tuple[int, int] | None = None
     cookie_allowlist: list[str] = field(default_factory=settings.cookie_allowlist)
+
+    excluded_folders: tuple[Path, ...] = field(default_factory=lambda: tuple(
+        Path(p) for p in settings.get("excluded_folders", []) if isinstance(p, str) and os.path.isabs(p)))
+
+    def excludes_folder(self, path: str) -> bool:
+        location = Path(path)
+        return any(location.is_relative_to(folder) for folder in self.excluded_folders)
 
     def running_processes(self) -> set[str]:
         if self.running is None:
@@ -227,8 +237,12 @@ def _delete_file(path: str) -> None:
 
 def _clean_filekey(fk: FileKey, rule: Rule, ctx: Context, res: RuleResult) -> None:
     clean = ctx.mode == Mode.CLEAN
-    for raw in _variants(fk.path, ctx):
-        for root in glob_paths(raw):
+    for raw in ([fk.path] if fk.literal else _variants(fk.path, ctx)):
+        if fk.literal and any(_is_reparse(str(parent)) for parent in Path(raw).parents):
+            continue
+        for root in ([raw] if fk.literal else glob_paths(raw)):
+            if ctx.excludes_folder(root):
+                continue
             if ctx.cancel.is_set():
                 return
             if _is_drive_root(root):
@@ -240,11 +254,13 @@ def _clean_filekey(fk: FileKey, rule: Rule, ctx: Context, res: RuleResult) -> No
             if _is_reparse(root) or not os.path.isdir(root):
                 continue
             pats = [_wild(p) for p in fk.patterns]
-            walker = _walk(root) if fk.recurse else [(root, _listfiles(root))]
+            walker = _walk(root, ctx) if fk.recurse else [(root, _listfiles(root))]
             for dirpath, filenames in walker:
                 if ctx.cancel.is_set():
                     return
                 for fn in filenames:
+                    if ctx.cancel.is_set():
+                        return
                     if not any(p.match(fn) for p in pats):
                         continue
                     full = os.path.join(dirpath, fn)
@@ -287,14 +303,18 @@ def _clean_filekey(fk: FileKey, rule: Rule, ctx: Context, res: RuleResult) -> No
                     pass
 
 
-def _walk(root: str):
+def _walk(root: str, ctx: Context):
     """Bottom-up (dirpath, filenames); never enters or touches symlinks/junctions."""
+    if ctx.cancel.is_set() or ctx.excludes_folder(root):
+        return
     files: list[str] = []
     dirs: list[str] = []
     try:
         with os.scandir(root) as it:
             for e in it:
                 try:
+                    if ctx.cancel.is_set():
+                        return
                     if _is_reparse(e.path):
                         continue
                     if e.is_dir(follow_symlinks=False):
@@ -306,7 +326,7 @@ def _walk(root: str):
     except OSError:
         return
     for d in dirs:
-        yield from _walk(d)
+        yield from _walk(d, ctx)
     yield root, files
 
 
@@ -320,32 +340,79 @@ def _listfiles(root: str) -> list[str]:
 
 # ---- registry ---------------------------------------------------------------
 
-def _clean_regkey(rk, ctx: Context, res: RuleResult, backup: dict) -> None:
+def _hkcu(path: str) -> bool:
+    return path.partition("\\")[0].upper() in ("HKCU", "HKEY_CURRENT_USER")
+
+
+def _snapshot(rk):
+    hive, sub = winutil._split_reg(rk.path)
+    if rk.value is None:
+        return winutil.reg_dump(hive, sub)
+    import winreg
+    with winreg.OpenKey(hive, sub) as key:
+        value, kind = winreg.QueryValueEx(key, rk.value)
+    return [kind, value.hex() if isinstance(value, bytes) else value]
+
+
+class RegistryBackup:
+    def __init__(self, rules, ctx):
+        self.entries = {}
+        self.error = ""
+        if ctx.mode != Mode.CLEAN or not winutil.IS_WINDOWS:
+            return
+        try:
+            for rule in rules:
+                if not rule.reg_keys or not is_applicable(rule, ctx):
+                    continue
+                for rk in rule.reg_keys:
+                    if not _hkcu(rk.path):
+                        continue
+                    key = rk.path if rk.value is None else rk.path + "|" + rk.value
+                    try:
+                        self.entries[key] = _snapshot(rk)
+                    except FileNotFoundError:
+                        continue
+            if not self.entries or ctx.cancel.is_set():
+                return
+            if ctx.backup_dir is None:
+                raise OSError("No registry backup directory configured")
+            ctx.backup_dir.mkdir(parents=True, exist_ok=True)
+            path = ctx.backup_dir / f"registry_{datetime.now():%Y%m%d_%H%M%S}_{uuid4().hex}.json"
+            temporary = path.with_suffix(".tmp")
+            try:
+                with temporary.open("x", encoding="utf-8") as stream:
+                    json.dump(self.entries, stream, indent=1)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            ctx.progress(f"Registry backup saved to {path}")
+        except OSError as error:
+            self.error = str(error)
+
+
+def _clean_regkey(rk, ctx: Context, res: RuleResult, backup: RegistryBackup) -> None:
     if not winutil.IS_WINDOWS:
         return
-    hive = rk.path.split("\\", 1)[0].upper()
-    if hive not in ("HKCU", "HKEY_CURRENT_USER"):
-        res.notes.append(f"skipped {hive} registry key (HKCU only)")
+    if not _hkcu(rk.path):
+        res.notes.append(f"Skipped {rk.path} (HKCU only)")
         return
     exists = winutil.reg_value_exists(rk.path, rk.value) if rk.value else winutil.reg_key_exists(rk.path)
     if not exists:
         return
+    if ctx.mode == Mode.CLEAN:
+        key = rk.path if rk.value is None else rk.path + "|" + rk.value
+        try:
+            if backup.error:
+                raise OSError(backup.error)
+            if key not in backup.entries or _snapshot(rk) != backup.entries[key]:
+                raise OSError("Registry entry changed since backup")
+            winutil.reg_delete(rk.path, rk.value)
+        except OSError as error:
+            res.errors.append(f"{rk.path}: {error}")
+            return
     res.reg_items += 1
-    if ctx.mode != Mode.CLEAN:
-        return
-    try:
-        h, sub = winutil._split_reg(rk.path)
-        if rk.value is None:
-            backup[rk.path] = winutil.reg_dump(h, sub)
-        else:
-            import winreg
-            with winreg.OpenKey(h, sub) as k:
-                v, t = winreg.QueryValueEx(k, rk.value)
-            backup[rk.path + "|" + rk.value] = [t, v.hex() if isinstance(v, bytes) else v]
-        winutil.reg_delete(rk.path, rk.value)
-    except OSError as e:
-        res.reg_items -= 1
-        res.errors.append(f"{rk.path}: {e}")
 
 
 # ---- built-in actions -------------------------------------------------------
@@ -359,10 +426,10 @@ def _action(act: Action, rule: Rule, ctx: Context, res: RuleResult) -> None:
     if name == "emptyrecyclebin":
         size, count = winutil.recycle_bin_info()
         if count:
-            res.files += count
-            res.bytes += size
             if clean:
                 winutil.empty_recycle_bin()
+            res.files += count
+            res.bytes += size
     elif name == "cleandnscache":
         res.notes.append("DNS resolver cache" + (" flushed" if clean else " will be flushed"))
         if clean:
@@ -381,7 +448,7 @@ def _action(act: Action, rule: Rule, ctx: Context, res: RuleResult) -> None:
             for root in glob_paths(raw):
                 if len(Path(root).parts) < 3 or _is_reparse(root):
                     continue
-                for dp, _fn in _walk(root):
+                for dp, _fn in _walk(root, ctx):
                     if dp == root:
                         continue
                     try:
@@ -397,29 +464,34 @@ def _action(act: Action, rule: Rule, ctx: Context, res: RuleResult) -> None:
             for profile in glob_paths(raw):
                 if ctx.cancel.is_set() or _is_reparse(profile) or not os.path.isdir(profile):
                     continue
+                if ctx.excludes_folder(profile) or any(p.is_relative_to(profile) for p in ctx.excluded_folders):
+                    res.notes.append("Skipped browser profile containing an excluded folder")
+                    continue
                 r = browserdb.process(name, profile, clean, ctx.cookie_allowlist, label, ctx.cancel.is_set)
+                res.errors.extend(r.notes)
                 res.records += r.records
                 res.bytes += r.bytes_freed
                 res.notes += [n for n in r.notes if n not in res.notes]
                 res.items += [(f"{db}  ({n} records)", 0) for db, n in r.items]
     elif name == "cleanwindowseventlogs":
         logs = winutil.event_logs()
+        if clean and logs:
+            failed = set(winutil.clear_event_logs([log for log, _n, _s in logs]))
+            res.errors.extend(f"Could not clear event log: {log}" for log in sorted(failed))
+            after = {log: size for log, _, size in winutil.event_logs(include_empty=True)}
+            logs = [(log, n, max(0, size - after.get(log, size))) for log, n, size in logs if log not in failed]
         res.records += sum(n for _l, n, _s in logs)
         res.bytes += sum(s for _l, _n, s in logs)
         res.items += [(f"{log}  ({n} events)", size) for log, n, size in logs[:MAX_LISTED_ITEMS]]
-        if clean and logs:
-            failed = winutil.clear_event_logs([log for log, _n, _s in logs])
-            if failed:
-                res.notes.append(f"{len(failed)} log(s) could not be cleared (administrator needed)")
     else:
         res.notes.append(f"unsupported action '{act.name}' (skipped)")
 
 
 # ---- driver -----------------------------------------------------------------
 
-def run_rule(rule: Rule, ctx: Context, backup: dict | None = None) -> RuleResult:
+def run_rule(rule: Rule, ctx: Context, backup: RegistryBackup | None = None) -> RuleResult:
     res = RuleResult(rule.id, rule.name, ctx.mode)
-    backup = backup if backup is not None else {}
+    backup = backup or RegistryBackup([rule], ctx)
     if not is_applicable(rule, ctx):
         res.applicable = False
         return res
@@ -451,17 +523,12 @@ def run(rule_ids: Iterable[str], ctx: Context) -> list[RuleResult]:
     by_id = ctx.rules.by_id()
     selected = [by_id[i] for i in rule_ids if i in by_id]
     results: list[RuleResult] = []
-    backup: dict = {}
+    backup = RegistryBackup(selected, ctx)
     for n, rule in enumerate(selected, 1):
         if ctx.cancel.is_set():
             break
         ctx.progress(f"[{n}/{len(selected)}] {ctx.mode}: {rule.name}")
         results.append(run_rule(rule, ctx, backup))
-    if backup and ctx.backup_dir:
-        ctx.backup_dir.mkdir(parents=True, exist_ok=True)
-        out = ctx.backup_dir / f"registry_{datetime.now():%Y%m%d_%H%M%S}.json"
-        out.write_text(json.dumps(backup, indent=1), encoding="utf-8")
-        ctx.progress(f"registry backup written: {out}")
     return results
 
 

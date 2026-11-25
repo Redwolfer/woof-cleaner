@@ -194,6 +194,19 @@ class SkipIgnoreTests(SettingsSandbox):
 
 
 class SchedulerTests(SettingsSandbox):
+    def test_auto_clean_saved_selection(self):
+        from woofcleaner import cli
+        rules = Path(self._td.name) / "rules.ini"
+        rules.write_text("[One]\nID=one\nDefault=True\n[Admin]\nID=admin\nNeedsAdmin=True\n")
+        for saved, expected in [(None, ["one"]), ([], []), (["retired"], []),
+                                (["retired", "one", "admin"], ["one"])]:
+            if saved is not None:
+                settings.save(clean_selection=saved)
+            with mock.patch.object(cli, "run", return_value=[]) as engine, mock.patch.object(winutil, "is_admin", return_value=False):
+                cli.main(["--rules-file", str(rules), "auto-clean"])
+                self.assertEqual(engine.call_args.args[0], expected)
+                self.assertEqual(settings.get("autoclean_history")[-1]["rules"], len(expected))
+
     def test_calendar_triggers(self):
         now = datetime(2026, 10, 20, 12, 0)    # a Tuesday
         s = scheduler.Schedule("x", "biweekly", "Friday", "09:30")
@@ -269,6 +282,25 @@ class RegistryCleanerTests(unittest.TestCase):
         self.assertEqual((n, errors), (2, []))
         self.assertEqual(winutil.reg_get(self.KEY + r"\Run", "Ghost"), f'"{self.gone}" --tray')
         self.assertEqual(winutil.reg_get(self.KEY + r"\App Paths\ghost.exe", "Path"), str(self.tmp))
+
+    def test_custom_clean_durable_backup(self):
+        root = self.KEY + r"\Run"
+        rule = parse_rules(f"[Test]\nID=t\nRegKey1={root}|Ghost\nRegKey2={root}\\Child")
+        directory = self.tmp / "backups"
+        bad = self.tmp / "file"
+        bad.touch()
+        winutil.reg_set(root + r"\Child", "binary", 3, "00ff")
+        failed = run(["t"], Context(rule, mode=Mode.CLEAN, backup_dir=bad))[0]
+        self.assertTrue(failed.errors)
+        self.assertTrue(winutil.reg_value_exists(root, "Ghost"))
+        for _ in range(2):
+            res = run(["t"], Context(rule, mode=Mode.CLEAN, backup_dir=directory))[0]
+            self.assertEqual((res.reg_items, res.errors), (2, []))
+            self.assertFalse(winutil.reg_key_exists(root + r"\Child"))
+            latest = regscan.list_backups(directory)[0]
+            self.assertEqual(regscan.restore(latest), (2, []))
+            self.assertEqual(winutil.reg_get(root + r"\Child", "binary"), bytes.fromhex("00ff"))
+        self.assertEqual(len(regscan.list_backups(directory)), 2)
 
     def test_real_scan_only_reads(self):
         issues = regscan.scan(["muicache", "startup"])

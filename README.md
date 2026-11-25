@@ -1,14 +1,17 @@
 # 🐶 Woof Cleaner
 
-A rule-driven PC cleaner and toolkit for Windows.
+A rule-driven PC cleaner and toolkit for Windows. **1.0.0** is the first stable version of the series that began at **0.1.0**.
 See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) for the architecture and [docs/ROADMAP.md](docs/ROADMAP.md) for what is next.
+The [LLM project guide](AGENTS.md) maps user workflows to code and links to the [CCleaner research](docs/CCLEANER_RESEARCH.md).
 
 Pure Python 3.10+ standard library. No dependencies. It uses Windows' own tools (winget, Windows Update,
 `Get-ScheduledTask`) where they exist.
 
 ## Install
 
-Run **`dist\WoofCleaner-Setup-<version>.exe`** (~12 MB). The wizard lets you choose:
+To move from the previous 0.3.0 or 0.4.0 series, run the new installer once using the same install scope.
+
+Run **`dist\fresh-v<version>\WoofCleaner-Setup-<version>.exe`**. The wizard offers the following choices.
 
 * **Only for me** (default, no admin) → `%LOCALAPPDATA%\Programs\Woof Cleaner`, or **all users** → `Program Files`
 * Start Menu shortcut, optional Desktop shortcut, optional `woof` command on PATH
@@ -21,7 +24,7 @@ Silent install for scripting: `WoofCleaner-Setup-<version>.exe /VERYSILENT /CURR
 Woof Cleaner updates itself from this repository's **GitHub Releases**:
 
 * On start-up (at most once a day) and with the **Check for updates** button, the app asks GitHub for the
-  latest release. If it's newer, it shows the release notes with *Update now / Later / Skip this version*.
+  latest release. The new series uses tags such as `fresh-v0.1.0`. If a release in this series is newer, it shows the release notes with *Update now / Later / Skip this version*.
 * **Update now** downloads the installer, verifies its **SHA-256**, runs it silently into the same folder, and
   restarts the new version. Portable copies swap the exe in place. A file without a matching checksum is never run.
 * Command line: `woof update` (or `woof update --check`).
@@ -36,11 +39,11 @@ Woof Cleaner updates itself from this repository's **GitHub Releases**:
 
 ## Portable (no install)
 
-`dist\WoofCleaner.exe` is a single self-contained file (~10 MB). Copy it to any 64-bit Windows 11 PC and
+`dist\fresh-v<version>\WoofCleaner.exe` is a single self-contained file. Copy it to any 64-bit Windows 11 PC and
 double-click it. **Python is not required**: the Python runtime, Tk and the rules are bundled inside.
-`dist\woof.exe` is the same program for the command line.
+`dist\fresh-v<version>\woof.exe` is the same program for the command line.
 
-* Settings and backups go to `%LOCALAPPDATA%\WoofCleaner\backups`.
+* Settings live in `%LOCALAPPDATA%\WoofCleaner\settings.json`. Registry backups live in the adjacent `backups` folder.
 * To customise cleaning rules without rebuilding, put an edited `rules.ini` next to the `.exe`.
 * The exe is not code-signed, so Windows SmartScreen may show "Windows protected your PC" the first time
   (click *More info → Run anyway*). Signing it with a code-signing certificate removes that warning.
@@ -73,8 +76,11 @@ theme (or *Match Windows*), and Ctrl+1 … Ctrl+9 to jump between pages.
 | **Software Updater** | finds newer versions of installed apps and installs them silently; **Skip this version** / **Ignore app** | `winget upgrade` |
 | **Driver Updater** | Microsoft-certified driver updates, devices with driver problems; **Skip update** / **Ignore device** | Windows Update Agent API (`Microsoft.Update.Session`) + `Win32_PnPSignedDriver` / `Win32_PnPEntity` |
 | **Uninstaller** | lists installed programs, runs their uninstaller, then sweeps leftovers | Uninstall registry keys (HKLM 64/32-bit + HKCU); MSI via `msiexec /x`; leftovers go to the Recycle Bin or a registry backup |
-| **Scheduled Cleaning** | daily, weekly, every 2 weeks or at every sign-in; history of automatic cleans | per-user Task Scheduler task with *run when available* (a missed run happens when the PC is next on); sign-in uses `HKCU\…\Run` |
+| **Scheduled Cleaning** | daily, weekly, every 2 weeks or at every sign-in; recent scans and manual or automatic cleans | per-user Task Scheduler task with *run when available* (a missed run happens when the PC is next on); sign-in uses `HKCU\…\Run` |
+| **PC overview** | Health Check, disk usage by extension and daily activity | Health Check previews selected rules and enabled startup apps. Disk usage scans a folder on request. Statistics sum reclaimed bytes from completed work, including partial runs |
 | **Settings** | theme, cookie allowlist, start as administrator **without a UAC prompt**, update checks, data folder | the no-UAC start is an on-demand task with highest privileges, created once from an elevated window |
+
+In Custom Clean, use **Folders** to include folders or protect a subtree during file scans. Tick **Custom folders** to include those files in a clean. Custom Clean exports summary and listed details to CSV. Duplicate Finder exports each copy and its latest move result. On smaller windows the **Tool** dropdown provides access to every page.
 
 ## Command line
 
@@ -99,7 +105,7 @@ python -m woofcleaner contextmenu [--all] [--disable N | --enable N | --delete N
 python -m woofcleaner auto-clean                    # what a schedule runs: the saved selection, no questions
 ```
 
-Every destructive command asks first (`--yes` skips the question).
+The interactive `clean` command previews selected items and asks for confirmation. Pass `--yes` to confirm in advance. Scheduled jobs use `auto-clean` and the saved selection.
 **Restart as administrator** in the GUI header (or an elevated prompt) unlocks `C:\Windows\Temp`, Prefetch,
 HKLM startup entries, scheduled tasks and driver installs.
 
@@ -107,7 +113,7 @@ HKLM startup entries, scheduled tasks and driver installs.
 
 * Cleaner: Analyze never deletes. Symlinks and junctions are never followed. Drive roots and shallow
   recursive paths are refused. The `%TEMP%` rule only removes files older than 24 h. Files in use are skipped.
-* Registry, startup and leftover deletes are backed up to `backups\*.json` first. Files and folders from the
+* Registry Fix writes its JSON backup before applying changes. Custom Clean saves a recoverable snapshot of the selected registry targets before deleting any of them. Files and folders from the
   Uninstaller, Startup and Duplicate Finder go to the **Recycle Bin** (undoable).
 * Duplicate Finder refuses to delete every copy of a file. It skips cloud placeholders, which reading would
   download, and it skips system folders.
@@ -118,8 +124,7 @@ HKLM startup entries, scheduled tasks and driver installs.
 * The registry cleaner never judges network, removable, access-denied or WindowsApps paths, skips commands run
   through hosts such as rundll32/msiexec, and leaves services, file associations and firewall rules alone.
   HKLM issues need administrator rights.
-* Scheduled cleans only run the items ticked in Custom Clean; items that need administrator rights are skipped
-  unless the schedule was created *with administrator rights*.
+* Scheduled cleans use the saved Custom Clean selection. Defaults apply on first use. An empty or entirely obsolete selection schedules zero rules. Non-elevated runs skip rules that require administrator rights.
 
 ## Tests
 

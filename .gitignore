@@ -5,3 +5,4 @@ dist/
 backups/
 .claude/
 settings.json
+settings.lock

@@ -17,10 +17,10 @@ PALETTES = {
         "bg": "#f3f4f7", "surface": "#ffffff", "surface2": "#eef0f4", "hover": "#e6e9ef", "border": "#dfe2e8",
         "button": "#ffffff", "btn_border": "#cdd2db", "btn_hover": "#f1f3f7",
         "text": "#1b2130", "muted": "#677086", "faint": "#a3aabb",
-        "accent": "#e2772b", "accent_hover": "#cb6420", "accent_press": "#b25719", "accent_text": "#ffffff",
+        "accent": "#9c4715", "accent_hover": "#863b10", "accent_press": "#70300d", "accent_text": "#ffffff",
         "accent_soft": "#fdeee3", "select": "#fbe0cc",
         "sidebar": "#ffffff", "side_hover": "#f3f4f7", "side_active": "#fdeee3", "side_text": "#3a4152",
-        "side_muted": "#8a92a5", "side_active_text": "#c25e17",
+        "side_muted": "#5f687b", "side_active_text": "#913e11",
         "good": "#15803d", "good_soft": "#dcfce7", "warn": "#b45309", "warn_soft": "#fef3c7",
         "bad": "#c62828", "bad_soft": "#fde2e2",
     },
@@ -31,7 +31,7 @@ PALETTES = {
         "accent": "#f08a3e", "accent_hover": "#f59c57", "accent_press": "#d97526", "accent_text": "#1a1206",
         "accent_soft": "#3a2717", "select": "#4a3020",
         "sidebar": "#0f1115", "side_hover": "#1a1d23", "side_active": "#2a1e14", "side_text": "#c3c8d4",
-        "side_muted": "#6c7487", "side_active_text": "#f5a262",
+        "side_muted": "#919aaf", "side_active_text": "#f5a262",
         "good": "#4ade80", "good_soft": "#123322", "warn": "#fbbf24", "warn_soft": "#3a2c0c",
         "bad": "#f87171", "bad_soft": "#3b1717",
     },
@@ -168,7 +168,7 @@ class Theme:
         # clam draws the 1px bordercolor outline only for raised/sunken reliefs; light/dark = face keeps it flat
         s.configure("TButton", background=c["button"], foreground=c["text"], bordercolor=c["btn_border"],
                     lightcolor=c["button"], darkcolor=c["button"], relief="raised", padding=(14, 7),
-                    focusthickness=0, focuscolor=c["button"], font=f["body"])
+                    focusthickness=1, focuscolor=c["button"], font=f["body"], width=0)
         s.map("TButton", background=[("disabled", c["surface2"]), ("pressed", c["hover"]), ("active", c["btn_hover"])],
               lightcolor=[("disabled", c["surface2"]), ("active", c["btn_hover"])],
               darkcolor=[("disabled", c["surface2"]), ("active", c["btn_hover"])],
@@ -192,6 +192,10 @@ class Theme:
         s.map("Ghost.TButton", background=[("active", c["surface2"])], bordercolor=[("active", c["surface2"])],
               lightcolor=[("active", c["surface2"])], darkcolor=[("active", c["surface2"])],
               focuscolor=[("active", c["surface2"])])
+
+        for style in ("TButton", "Accent.TButton", "Danger.TButton", "Ghost.TButton"):
+            focus = c["accent_text"] if style == "Accent.TButton" else c["accent"]
+            s.map(style, focuscolor=[("focus", focus)] + s.map(style, "focuscolor"))
 
         # check / radio
         for w in ("TCheckbutton", "TRadiobutton"):

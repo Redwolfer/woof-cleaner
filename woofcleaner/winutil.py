@@ -113,7 +113,9 @@ def reg_dump(hive, sub: str) -> dict:
         while True:
             try:
                 n, v, t = winreg.EnumValue(k, i)
-            except OSError:
+            except OSError as exc:
+                if exc.winerror != 259:  # ERROR_NO_MORE_ITEMS
+                    raise
                 break
             out["values"][n] = [t, v.hex() if isinstance(v, bytes) else v]
             i += 1
@@ -121,7 +123,9 @@ def reg_dump(hive, sub: str) -> dict:
         while True:
             try:
                 s = winreg.EnumKey(k, i)
-            except OSError:
+            except OSError as exc:
+                if exc.winerror != 259:  # ERROR_NO_MORE_ITEMS
+                    raise
                 break
             out["subkeys"][s] = reg_dump(hive, sub + "\\" + s)
             i += 1
@@ -317,18 +321,19 @@ def reg_open_ex(path: str, access: int, view: int = 0):
 # ---- event logs -------------------------------------------------------------
 
 _EVENT_LOGS_PS = r"""
-Get-WinEvent -ListLog * -ErrorAction SilentlyContinue | Where-Object { $_.RecordCount -gt 0 } | ForEach-Object {
+Get-WinEvent -ListLog * -ErrorAction SilentlyContinue | ForEach-Object {
   [pscustomobject]@{ N=$_.LogName; C=[int64]$_.RecordCount; S=[int64]$_.FileSize }
 } | ConvertTo-Json -Compress
 """
 
 
-def event_logs() -> list[tuple[str, int, int]]:
-    """(log name, record count, file size) of every non-empty Windows event log readable by this user."""
+def event_logs(include_empty=False) -> list[tuple[str, int, int]]:
+    """Log name, record count, and file size from the readable Windows event logs."""
     if not IS_WINDOWS:
         return []
     rows = ps_json(_EVENT_LOGS_PS, timeout=180)
-    return sorted(((r["N"], int(r.get("C") or 0), int(r.get("S") or 0)) for r in rows), key=lambda x: -x[2])
+    logs = [(r["N"], int(r.get("C") or 0), int(r.get("S") or 0)) for r in rows]
+    return sorted((log for log in logs if include_empty or log[1] > 0), key=lambda x: -x[2])
 
 
 def clear_event_logs(names: list[str]) -> list[str]:

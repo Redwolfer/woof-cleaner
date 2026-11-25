@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 from .. import duplicates as dup
 from .. import winutil
 from ..engine import human
-from .common import BaseTab, Table, confirm, heading, stat_row, toolbar
+from .common import BaseTab, Table, confirm, heading, stat_row, toolbar, wrap_toolbar
 
 SIZES = {"any size": 1, "> 100 KB": 100 * 1024, "> 1 MB": 1024 ** 2, "> 10 MB": 10 * 1024 ** 2, "> 100 MB": 100 * 1024 ** 2}
 TYPES = {"All files": None,
@@ -29,6 +29,8 @@ class DupesTab(BaseTab):
         super().__init__(parent, app)
         self.groups: list[dup.DupGroup] = []
         self.cancel = threading.Event()
+        self.outcomes = {}
+        self.scanned_groups = []
         head = heading(self, "Duplicate Finder", "Finds files with identical content (size, then BLAKE2 hash). "
                        "Deleted copies go to the Recycle Bin, and one copy of every file is always kept.")
         head.pack(fill="x")
@@ -38,14 +40,14 @@ class DupesTab(BaseTab):
 
         opts = toolbar(self)
         self.folder = tk.StringVar(value=os.path.expanduser("~"))
-        ttk.Entry(opts, textvariable=self.folder, width=44).pack(side="left")
+        ttk.Entry(opts, textvariable=self.folder, width=25).pack(side="left")
         ttk.Button(opts, text="Browse ...", command=self._browse).pack(side="left", padx=6)
         ttk.Label(opts, text="Size", style="Muted.TLabel").pack(side="left", padx=(12, 4))
         self.size = tk.StringVar(value="> 1 MB")
         ttk.Combobox(opts, textvariable=self.size, values=list(SIZES), width=10, state="readonly").pack(side="left")
-        ttk.Label(opts, text="Type", style="Muted.TLabel").pack(side="left", padx=(12, 4))
+        ttk.Label(opts, text="Type / extensions", style="Muted.TLabel").pack(side="left", padx=(12, 4))
         self.kind = tk.StringVar(value="All files")
-        ttk.Combobox(opts, textvariable=self.kind, values=list(TYPES), width=18, state="readonly").pack(side="left")
+        ttk.Combobox(opts, textvariable=self.kind, values=list(TYPES), width=18).pack(side="left")
         self.hidden = tk.BooleanVar(value=False)
         ttk.Checkbutton(opts, text="Hidden/system", variable=self.hidden).pack(side="left", padx=12)
 
@@ -53,14 +55,26 @@ class DupesTab(BaseTab):
         ttk.Label(bar, text="Auto-select, keep the", style="Muted.TLabel").pack(side="left")
         for label, key in (("oldest", "oldest"), ("newest", "newest"), ("shortest path", "shortest")):
             ttk.Button(bar, text=label, style="Ghost.TButton", command=lambda k=key: self._auto(k)).pack(side="left")
+        ttk.Button(bar, text="Export CSV", command=self._export).pack(side="left")
         ttk.Button(bar, text="Clear marks", style="Ghost.TButton", command=lambda: self.table.set_all(False)).pack(side="left", padx=8)
         ttk.Button(bar, text="Stop search", style="Danger.TButton", command=self.cancel.set).pack(side="right")
         ttk.Button(bar, text="Open file location", style="Ghost.TButton", command=self._open_folder).pack(side="right", padx=8)
 
+        wrap_toolbar(opts)
+        wrap_toolbar(bar)
         self.cards = stat_row(self, [("Reclaimable", True), ("Duplicate groups", False), ("Marked", False)])
         self.table = Table(self, [("size", "Size", 100, "e"), ("modified", "Modified", 150, "w")],
                            tree_heading="File", on_toggle=self._summary)
         self.table.pack(fill="both", expand=True)
+
+    def _export(self):
+        from .export import save_csv
+        def rows():
+            yield ("Group", "Path", "Bytes", "Result")
+            for i, group in enumerate(self.scanned_groups, 1):
+                for file in group.files:
+                    yield (i, file.path, group.size, self.outcomes.get(file.path, "Found"))
+        save_csv(self, "duplicates", rows())
 
     def _browse(self):
         d = filedialog.askdirectory(initialdir=self.folder.get(), parent=self)
@@ -73,11 +87,20 @@ class DupesTab(BaseTab):
             messagebox.showwarning("Woof Cleaner", "Pick an existing folder.", parent=self)
             return
         self.cancel.clear()
-        min_size, exts, hidden = SIZES[self.size.get()], TYPES[self.kind.get()], self.hidden.get()
+        kind = self.kind.get().strip()
+        exts = TYPES.get(kind)
+        if kind not in TYPES:
+            exts = {"." + ext.strip().lower().lstrip(".") for ext in kind.split(",") if ext.strip().lstrip(".")}
+            if not exts:
+                messagebox.showinfo("Duplicate Finder", "Choose a type or enter extensions such as jpg,png.", parent=self)
+                return
+        min_size, hidden = SIZES[self.size.get()], self.hidden.get()
         self.run_bg(lambda: dup.find_duplicates([root], min_size, hidden, exts, self.status, self.cancel),
                     self._loaded, f"Scanning {root} ...")
 
     def _loaded(self, groups):
+        self.scanned_groups = groups
+        self.outcomes.clear()
         self.groups = groups
         self._render(set())
         self.app.set_status(("Stopped - partial results. " if self.cancel.is_set() else "") +
@@ -117,6 +140,8 @@ class DupesTab(BaseTab):
 
     def delete(self):
         marked = self.marked()
+        if self.busy:
+            return
         if not marked:
             messagebox.showinfo("Woof Cleaner", "Tick the copies to remove (or use Auto-select).", parent=self)
             return
@@ -127,19 +152,14 @@ class DupesTab(BaseTab):
             return
         if not confirm(self, "Delete duplicates", f"Move {len(marked)} duplicate file(s) to the Recycle Bin?"):
             return
-        paths = sorted(marked)
 
-        def work():
-            for i in range(0, len(paths), 200):
-                winutil.send_to_recycle_bin(paths[i:i + 200])
-            return len(paths)
+        def done(outcomes):
+            self.outcomes.update(outcomes)
+            gone = {p for p, result in outcomes.items() if result == dup.MOVED}
+            remaining = [dup.DupGroup(g.size, g.digest, [f for f in g.files if f.path not in gone])
+                         for g in self.groups]
+            self.groups = [g for g in remaining if len(g.files) > 1]
+            self._render(set(outcomes) - gone)
+            self.app.set_status(f"Moved {len(gone)} files. Failed: {len(outcomes) - len(gone)}. See CSV for details.")
 
-        def done(count):
-            gone = set(paths)
-            for g in self.groups:
-                g.files = [f for f in g.files if f.path not in gone]
-            self.groups = [g for g in self.groups if len(g.files) > 1]
-            self._render(set())
-            self.app.set_status(f"Moved {count} files to the Recycle Bin")
-
-        self.run_bg(work, done, "Deleting ...")
+        self.run_bg(lambda: dup.recycle_selected(self.groups, marked), done, "Moving duplicates…")

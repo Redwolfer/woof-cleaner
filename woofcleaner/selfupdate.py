@@ -1,7 +1,7 @@
 """Self-update from GitHub Releases.
 
 Release layout expected (release.ps1 produces it):
-    tag  v<version>
+    tag  fresh-v<version>
     WoofCleaner-Setup-<version>.exe   installer (used when the app was installed)
     WoofCleaner.exe                   portable build (used when running the portable exe)
     SHA256SUMS.txt                    "<sha256>  <file name>" lines
@@ -87,11 +87,15 @@ def _get(url: str, timeout: int = 20) -> bytes:
         return r.read()
 
 
-def latest_release(repo: str = UPDATE_REPO) -> Release:
+def latest_release(repo: str = UPDATE_REPO) -> Release | None:
     if not repo:
         raise RuntimeError("No update repository configured (UPDATE_REPO in woofcleaner/__init__.py).")
     data = json.loads(_get(API.format(repo=repo)))
-    rel = Release(version=data["tag_name"].lstrip("vV"), tag=data["tag_name"], notes=data.get("body") or "",
+    tag = data["tag_name"]
+    match = re.fullmatch(r"fresh-v(\d+\.\d+\.\d+)", tag)
+    if not match:
+        return None
+    rel = Release(version=match.group(1), tag=tag, notes=data.get("body") or "",
                   page=data.get("html_url", f"https://github.com/{repo}/releases"))
     sums_url = None
     for a in data.get("assets", []):
@@ -112,7 +116,7 @@ def check(repo: str = UPDATE_REPO) -> Release | None:
     """The newer release, or None when up to date. Records the check time."""
     rel = latest_release(repo)
     save_settings(last_check=time.time())
-    return rel if is_newer(rel.version) else None
+    return rel if rel and is_newer(rel.version) else None
 
 
 # ---- install kinds ---------------------------------------------------------------------

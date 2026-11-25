@@ -90,6 +90,8 @@ def cmd_clean(a):
             return 1
         ctx = Context(rs, mode=Mode.CLEAN, backup_dir=BACKUP_DIR, progress=progress)
     results = run(ids, ctx)
+    from . import scheduler
+    scheduler.record_results(results, mode, "CLI")
     if a.json:
         print(json.dumps([r.__dict__ for r in results], indent=1, default=list))
     else:
@@ -174,9 +176,10 @@ def cmd_dupes(a):
     if a.delete:
         victims = dup.auto_select(groups, a.delete)
         if victims and _ask(f"Move {len(victims)} duplicates to the Recycle Bin (keeping the {a.delete} copy)?", a.yes):
-            for i in range(0, len(victims), 200):
-                winutil.send_to_recycle_bin(victims[i:i + 200])
-            print("done")
+            outcomes = dup.recycle_selected(groups, set(victims))
+            for path, result in outcomes.items():
+                print(f"{path}: {result}")
+            return int(any(result != dup.MOVED for result in outcomes.values()))
 
 
 # ---- software / drivers ------------------------------------------------------------
@@ -321,7 +324,7 @@ def cmd_schedule(a):
         print(f"{s.id}  [{'on ' if s.enabled else 'off'}] {s.description:<34} next: {s.next_run or '-':<17} "
               f"last: {s.last_run or '-'} {s.last_result}")
     sel = settings.get("clean_selection")
-    what = f"the Custom Clean selection ({len(sel)} rules)" if sel else "the default rules"
+    what = load_rules(a.rules_file).selection_summary(sel)
     print(f"\nScheduled cleans use {what}.")
 
 
@@ -333,7 +336,7 @@ def cmd_autoclean(a):
         _t.sleep(a.delay)
     rs = load_rules(a.rules_file)
     known = rs.by_id()
-    ids = [i for i in (settings.get("clean_selection") or []) if i in known] or [r.id for r in rs.rules if r.default]
+    ids = rs.selection(settings.get("clean_selection"))
     if not winutil.is_admin():
         ids = [i for i in ids if not known[i].needs_admin]
     results = run(ids, Context(rs, mode=Mode.CLEAN, backup_dir=BACKUP_DIR))

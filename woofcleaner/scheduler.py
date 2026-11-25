@@ -347,8 +347,18 @@ def start_elevated() -> bool:
 
 # ---- history ----------------------------------------------------------------------------------
 
-def record_run(trigger: str, freed: int, files: int, records: int, rules: int, errors: int) -> None:
-    hist = settings.get("autoclean_history", [])
-    hist.append({"time": datetime.now().strftime("%Y-%m-%d %H:%M"), "trigger": trigger, "freed": freed,
-                 "files": files, "records": records, "rules": rules, "errors": errors})
-    settings.save(autoclean_history=hist[-100:])
+def record_run(trigger: str, freed: int, files: int, records: int, rules: int, errors: int,
+               mode: str = "clean", cancelled: bool = False) -> None:
+    row = {"time": datetime.now().strftime("%Y-%m-%d %H:%M"), "trigger": trigger, "mode": mode,
+           "freed": freed if mode == "clean" else 0, "estimated": freed if mode == "analyse" else 0,
+           "files": files, "records": records, "rules": rules, "errors": errors,
+           "status": "Cancelled" if cancelled else "Partial" if errors else "Completed"}
+    def append(state):
+        state["autoclean_history"] = (state.get("autoclean_history", []) + [row])[-100:]
+    settings.update(append)
+
+
+def record_results(results, mode, trigger, cancelled=False):
+    record_run(trigger, sum(r.bytes for r in results), sum(r.files for r in results),
+               sum(r.records for r in results), len(results), sum(len(r.errors) for r in results),
+               mode, cancelled)

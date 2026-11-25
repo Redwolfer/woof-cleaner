@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import queue
 import sys
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
@@ -13,6 +14,7 @@ from .common import CheckImages
 from .drivers_tab import DriversTab
 from .dupes_tab import DupesTab
 from .registry_tab import RegistryTab
+from .reports_tab import ReportsTab
 from .schedule_tab import ScheduleTab
 from .settings_tab import SettingsTab
 from .software_tab import SoftwareTab
@@ -33,7 +35,9 @@ NAV = [
 
 class NavItem(tk.Frame):
     def __init__(self, parent, app, icon: str, text: str, command):
-        super().__init__(parent, cursor="hand2", height=40)
+        super().__init__(parent, cursor="hand2", height=40, takefocus=True, highlightthickness=1)
+        self.bind("<Return>", lambda _e: command())
+        self.bind("<space>", lambda _e: command())
         self.app, self.command, self.active, self.hover = app, command, False, False
         t = app.theme
         self.bar = tk.Frame(self, width=3)
@@ -65,6 +69,7 @@ class NavItem(tk.Frame):
             w.configure(bg=bg)
         self.icon.configure(fg=c["accent"] if self.active else c["side_muted"] if not self.hover else c["side_text"])
         self.label.configure(fg=fg, font=f["semibold"] if self.active else f["body"])
+        self.configure(highlightbackground=bg, highlightcolor=c["accent"])
         self.bar.configure(bg=c["accent"] if self.active else bg)
 
 
@@ -73,8 +78,9 @@ class App(tk.Tk):
         super().__init__()
         self.withdraw()
         self.title("Woof Cleaner")
-        self.geometry("1240x780")
-        self.minsize(1020, 640)
+        width, height = self.maxsize()
+        self.geometry(f"{min(1240, width)}x{min(780, height - 48)}")
+        self.minsize(min(680, width), min(440, height - 48))
         if paths.ICON.exists():
             try:
                 self.iconbitmap(default=str(paths.ICON))
@@ -102,20 +108,31 @@ class App(tk.Tk):
         self.content.rowconfigure(0, weight=1)
         self.content.columnconfigure(0, weight=1)
 
+        self.main = main
+        self.page_types: list = []
         self.pages: list = []
         self.nav: list[NavItem] = []
         self._brand()
         for section, classes in NAV:
             self._section(section)
             for cls in classes:
-                self._add_page(cls, rules_file if cls is CleanTab else None)
+                self._add_page(cls)
         spacer = tk.Frame(self.sidebar, height=1)
         spacer.pack(fill="both", expand=True)
         self.theme.paint(spacer, bg="sidebar")
-        self._add_page(SettingsTab, None)
+        self._add_page(SettingsTab)
+        self._add_page(ReportsTab)
         self._footer()
 
-        self._shown: set[int] = set()
+        self.compact_bar = ttk.Frame(main, padding=(12, 4))
+        ttk.Label(self.compact_bar, text="Tool").pack(side="left", padx=(0, 6))
+        self.tool_picker = ttk.Combobox(self.compact_bar, state="readonly", values=[c.title for c in self.page_types])
+        self.tool_picker.pack(side="left")
+        self.tool_picker.bind("<<ComboboxSelected>>", lambda _: self.show(self.tool_picker.current()))
+        if not self.is_admin:
+            ttk.Button(self.compact_bar, text="Restart as administrator", command=self.elevate).pack(side="right")
+        self._compact = None
+        self.bind("<Configure>", self._resize)
         self.current = -1
         self.show(0)
         for n in range(min(9, len(self.pages))):
@@ -152,12 +169,27 @@ class App(tk.Tk):
         lbl.pack(fill="x", padx=20, pady=(14, 4))
         self.theme.paint(lbl, bg="sidebar", fg="side_muted")
 
-    def _add_page(self, cls, rules_file):
-        page = cls(self.content, self, rules_file) if rules_file else cls(self.content, self)
-        page.grid(row=0, column=0, sticky="nsew")
+    def _resize(self, event):
+        if event.widget is not self:
+            return
+        compact = event.width < 1080 or event.height < self.sidebar.winfo_reqheight() or event.height < 720
+        if compact == self._compact:
+            return
+        self._compact = compact
+        if compact:
+            self.sidebar.pack_forget()
+            self.divider.pack_forget()
+            self.compact_bar.pack(before=self.content, fill="x")
+        else:
+            self.compact_bar.pack_forget()
+            self.sidebar.pack(before=self.main, side="left", fill="y")
+            self.divider.pack(before=self.main, side="left", fill="y")
+
+    def _add_page(self, cls):
         n = len(self.pages)
-        self.pages.append(page)
-        item = NavItem(self.sidebar, self, page.icon, page.title, lambda n=n: self.show(n))
+        self.page_types.append(cls)
+        self.pages.append(None)
+        item = NavItem(self.sidebar, self, cls.icon, cls.title, lambda n=n: self.show(n))
         item.pack(fill="x", padx=10, pady=1)
         self.nav.append(item)
 
@@ -198,19 +230,30 @@ class App(tk.Tk):
     def show(self, n: int):
         if n == self.current:
             return
+        if self.current >= 0:
+            self.pages[self.current].grid_remove()
         self.current = n
         for i, item in enumerate(self.nav):
             item.set_active(i == n)
+        self.tool_picker.current(n)
+        if self.pages[n] is None:
+            cls = self.page_types[n]
+            page = cls(self.content, self, self.rules_file) if cls is CleanTab else cls(self.content, self)
+            self.pages[n] = page
+            page.grid(row=0, column=0, sticky="nsew")
+            page.on_show()
+        elif isinstance(self.pages[n], ScheduleTab):
+            self.pages[n].refresh()
+        elif isinstance(self.pages[n], ReportsTab):
+            self.pages[n].refresh_stats()
+        self.pages[n].grid()
         self.pages[n].tkraise()
-        if n not in self._shown:
-            self._shown.add(n)
-            self.pages[n].on_show()
 
     def show_page(self, cls):
-        for n, p in enumerate(self.pages):
-            if isinstance(p, cls):
+        for n, page_type in enumerate(self.page_types):
+            if page_type is cls:
                 self.show(n)
-                return p
+                return self.pages[n]
         return None
 
     # ---- thread-safe UI calls
@@ -218,12 +261,14 @@ class App(tk.Tk):
         self._q.put(fn)
 
     def _pump(self):
+        deadline = time.monotonic() + 0.008
         try:
-            while True:
+            while time.monotonic() < deadline:
                 self._q.get_nowait()()
         except queue.Empty:
             pass
-        self.after(60, self._pump)
+        finally:
+            self.after(16 if self._q.empty() else 1, self._pump)
 
     def set_status(self, msg: str):
         self.status.config(text=msg)

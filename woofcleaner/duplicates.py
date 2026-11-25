@@ -9,6 +9,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
+from . import winutil
+
 HEAD = 64 * 1024
 CHUNK = 1024 * 1024
 SKIP_DIRS = {"$recycle.bin", "system volume information", "windows", "$windows.~bt", "$windows.~ws",
@@ -141,6 +143,29 @@ def auto_select(groups: list[DupGroup], keep: str = "oldest") -> list[str]:
             keeper = min(g.files, key=lambda f: f.mtime)
         out += [f.path for f in g.files if f is not keeper]
     return out
+
+
+MOVED = "Moved to Recycle Bin"
+
+
+def recycle_selected(groups: list[DupGroup], selected: set[str]) -> dict[str, str]:
+    outcomes = {}
+    for group in groups:
+        victims = [f.path for f in group.files if f.path in selected]
+        if not victims:
+            continue
+        keepers = [f.path for f in group.files if f.path not in selected]
+        for path in victims:
+            try:
+                if _hash(path, None) != group.digest:
+                    raise OSError("Selected copy changed or is unavailable")
+                if not any(_hash(keep, None) == group.digest for keep in keepers):
+                    raise OSError("No matching copy remains")
+                winutil.send_to_recycle_bin([path])
+                outcomes[path] = MOVED
+            except OSError as error:
+                outcomes[path] = f"Failed: {error}"
+    return outcomes
 
 
 def check_selection(groups: list[DupGroup], selected: set[str]) -> list[DupGroup]:

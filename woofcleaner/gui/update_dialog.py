@@ -23,7 +23,7 @@ def check_for_updates(app, manual: bool) -> None:
             if manual:
                 app.post(lambda: messagebox.showinfo("Woof Cleaner", f"You have the latest version ({__version__}).", parent=app))
             return
-        if not manual and selfupdate.load_settings().get("skip_version") == rel.version:
+        if not manual and selfupdate.load_settings().get("skip_version") == rel.tag:
             return
         app.post(lambda: UpdateDialog(app, rel))
 
@@ -69,7 +69,7 @@ class UpdateDialog(tk.Toplevel):
         app.theme.title_bar(self)
 
     def skip(self):
-        selfupdate.save_settings(skip_version=self.rel.version)
+        selfupdate.save_settings(skip_version=self.rel.tag)
         self.destroy()
 
     def update_now(self):

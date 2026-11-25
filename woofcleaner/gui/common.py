@@ -382,6 +382,24 @@ def heading(parent, text: str, sub: str = "") -> Header:
     return Header(parent, text, sub)
 
 
+def wrap_toolbar(frame):
+    """Flow a static row of controls onto extra lines when space becomes tight."""
+    widgets = list(frame.pack_slaves())
+    for widget in widgets:
+        widget.pack_forget()
+    def layout(event):
+        x = y = row_height = 0
+        for widget in widgets:
+            width = min(widget.winfo_reqwidth(), event.width)
+            if x and x + width > event.width:
+                x, y, row_height = 0, y + row_height + 4, 0
+            widget.place(x=x, y=y, width=width)
+            x += width + 6
+            row_height = max(row_height, widget.winfo_reqheight())
+        frame.configure(height=y + row_height)
+    frame.bind("<Configure>", layout, add="+")
+
+
 def toolbar(parent, pady=(14, 10)) -> ttk.Frame:
     f = ttk.Frame(parent)
     f.pack(fill="x", pady=pady)

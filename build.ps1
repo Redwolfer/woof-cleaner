@@ -1,7 +1,8 @@
-# Builds standalone executables into .\dist (no Python needed on the target PC).
-#   dist\WoofCleaner.exe  - the windowed app
-#   dist\woof.exe         - command-line version (same features, prints to the console)
+# Builds standalone executables into dist\fresh-v<version> (or -OutputDir).
+#   WoofCleaner.exe  - the windowed app
+#   woof.exe         - command-line version (same features, prints to the console)
 # Requires on the BUILD machine only: Python 3.10+ and `python -m pip install pyinstaller`.
+param([string]$OutputDir, [switch]$RequireInstaller)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 Set-Location $root
@@ -16,6 +17,8 @@ $version = (Select-String -Path "$root\woofcleaner\__init__.py" -Pattern '__vers
 $parts = @($version -split '[^\d]+' | Where-Object { $_ } | Select-Object -First 4)
 while ($parts.Count -lt 4) { $parts += '0' }
 New-Item -ItemType Directory -Force "$root\build" | Out-Null
+if (-not $OutputDir) { $OutputDir = "$root\dist\fresh-v$version" }
+$OutputDir = [IO.Path]::GetFullPath($OutputDir)
 $versionFile = "$root\build\version_info.txt"
 (Get-Content "$root\tools\version_info.txt" -Raw).Replace('{VERSION_TUPLE}', ($parts -join ', ')).Replace('{VERSION}', $version) |
     Set-Content -Path $versionFile -Encoding UTF8
@@ -28,7 +31,7 @@ $common = @(
     '--add-data', "$root\assets\woof-32.png;assets",
     '--version-file', $versionFile,
     '--paths', $root,
-    '--distpath', "$root\dist", '--workpath', "$root\build", '--specpath', "$root\build"
+    '--distpath', $OutputDir, '--workpath', "$root\build", '--specpath', "$root\build"
 )
 
 python -m PyInstaller @common --windowed --name WoofCleaner "$root\woof_gui.py"
@@ -39,11 +42,20 @@ if ($LASTEXITCODE -ne 0) { throw 'CLI build failed' }
 # Installer (optional): needs Inno Setup 6 -> winget install JRSoftware.InnoSetup
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
           "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+$assets = @('WoofCleaner.exe', 'woof.exe')
 if ($iscc) {
-    & $iscc /Q "/DAppVersion=$version" "$root\installer\woofcleaner.iss"
+    & $iscc /Q "/DAppVersion=$version" "/DArtifactDir=$OutputDir" "/O$OutputDir" "$root\installer\woofcleaner.iss"
     if ($LASTEXITCODE -ne 0) { throw 'installer build failed' }
+    $assets += "WoofCleaner-Setup-$version.exe"
+} elseif ($RequireInstaller) {
+    throw 'Inno Setup is required to build a release.'
 } else {
     Write-Warning 'Inno Setup not found - skipping the installer (winget install JRSoftware.InnoSetup)'
 }
 
-Get-ChildItem "$root\dist\*.exe" | Select-Object Name, @{n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } }
+$sums = foreach ($asset in $assets) {
+    '{0}  {1}' -f (Get-FileHash -LiteralPath (Join-Path $OutputDir $asset) -Algorithm SHA256).Hash.ToLowerInvariant(), $asset
+}
+[IO.File]::WriteAllLines((Join-Path $OutputDir 'SHA256SUMS.txt'), [string[]]$sums)
+$assets | ForEach-Object { Get-Item -LiteralPath (Join-Path $OutputDir $_) } |
+    Select-Object Name, @{n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } }
